@@ -1,0 +1,1 @@
+https://www.figma.com/design/TgjyMoNi89o6K6GwoXNvyM/Prot%C3%B3tipo-Carrinho?node-id=0-1&t=IYM5RxlCukSIruct-1
