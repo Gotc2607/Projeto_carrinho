@@ -22,14 +22,14 @@ int TEMPO_BASE_GRAUS = 15;  // tempo em ms por grau (ajustável)
 // ---------------------------
 Servo meuServo;
 int posicaoServo = 0;
-bool servoScanning = false; // controle para varredura automática
+bool servoScanning = false;
 
 // ---------------------------
 // MEMÓRIA (EEPROM)
 // ---------------------------
 #define EEPROM_END_COMANDOS 0
 #define MAX_COMANDOS 20
-String comandosSalvos[MAX_COMANDOS];
+#define MAX_COMANDO_LEN 30
 int totalComandos = 0;
 
 // ---------------------------
@@ -73,7 +73,7 @@ void curvaDireita(int graus) {
 // CONTROLE DO SERVO
 // ---------------------------
 void moverServo(int angulo) {
-  servoScanning = false; // interrompe modo automático, se ativo
+  servoScanning = false;
   if (angulo < 0) angulo = 0;
   if (angulo > 180) angulo = 180;
   meuServo.write(angulo);
@@ -84,13 +84,12 @@ void moverServo(int angulo) {
 
 void servoScan() {
   servoScanning = true;
-  Serial.println("Iniciando varredura automática do servo...");
+  Serial.println("Iniciando varredura do servo...");
 
   for (int ang = 0; ang <= 90 && servoScanning; ang++) {
     meuServo.write(ang);
     delay(15);
   }
-  delay(100);
   for (int ang = 90; ang >= 0 && servoScanning; ang--) {
     meuServo.write(ang);
     delay(15);
@@ -118,48 +117,90 @@ void calibrar(String tipo, int valor) {
 }
 
 // ---------------------------
+// EEPROM - SALVAR E EXECUTAR
+// ---------------------------
+void salvarComandoNaEEPROM(String cmd) {
+  if (totalComandos >= MAX_COMANDOS) {
+    Serial.println("Memória cheia!");
+    return;
+  }
+
+  int addr = EEPROM_END_COMANDOS + totalComandos * MAX_COMANDO_LEN;
+  for (int i = 0; i < MAX_COMANDO_LEN; i++) {
+    if (i < cmd.length()) EEPROM.write(addr + i, cmd[i]);
+    else EEPROM.write(addr + i, 0);
+  }
+
+  totalComandos++;
+  EEPROM.write(EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN, totalComandos);
+
+  Serial.print("Comando salvo: ");
+  Serial.println(cmd);
+}
+
+String lerComandoDaEEPROM(int index) {
+  if (index < 0 || index >= totalComandos) return "";
+  String cmd = "";
+  int addr = EEPROM_END_COMANDOS + index * MAX_COMANDO_LEN;
+  for (int i = 0; i < MAX_COMANDO_LEN; i++) {
+    char c = EEPROM.read(addr + i);
+    if (c == 0) break;
+    cmd += c;
+  }
+  return cmd;
+}
+
+void executarComandosSalvos() {
+  Serial.println("Executando comandos salvos...");
+  for (int i = 0; i < totalComandos; i++) {
+    String cmd = lerComandoDaEEPROM(i);
+    Serial.print("> ");
+    Serial.println(cmd);
+    delay(500);
+    // Executa normalmente
+    if (cmd.length() > 0) {
+      cmd.trim();
+      cmd.toUpperCase();
+      if (cmd.startsWith("FRENTE")) andarFrente(cmd.substring(7).toInt());
+      else if (cmd.startsWith("ESQUERDA")) curvaEsquerda(cmd.substring(9).toInt());
+      else if (cmd.startsWith("DIREITA")) curvaDireita(cmd.substring(8).toInt());
+      else if (cmd.startsWith("SERVO ")) moverServo(cmd.substring(6).toInt());
+      else if (cmd == "SERVO_SCAN") servoScan();
+      else if (cmd == "PARAR") parar();
+    }
+  }
+  Serial.println("Execução concluída.");
+}
+
+void limparEEPROM() {
+  for (int i = EEPROM_END_COMANDOS; i < EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN + 1; i++) {
+    EEPROM.write(i, 0);
+  }
+  totalComandos = 0;
+  Serial.println("EEPROM limpa!");
+}
+
+// ---------------------------
 // PROCESSAMENTO DE COMANDOS
 // ---------------------------
 void processarComando(String comando) {
   comando.trim();
-  comando.toUpperCase(); // ignora diferença de maiúsculas/minúsculas
+  comando.toUpperCase();
   Serial.print("Recebido: ");
   Serial.println(comando);
 
-  if (comando.startsWith("FRENTE")) {
-    int valor = comando.substring(7).toInt();
-    andarFrente(valor);
-  } 
-  else if (comando.startsWith("ESQUERDA")) {
-    int valor = comando.substring(9).toInt();
-    curvaEsquerda(valor);
-  } 
-  else if (comando.startsWith("DIREITA")) {
-    int valor = comando.substring(8).toInt();
-    curvaDireita(valor);
-  }
-  else if (comando.startsWith("SERVO ")) {
-    int angulo = comando.substring(6).toInt();
-    moverServo(angulo);
-  }
-  else if (comando == "SERVO_SCAN") {
-    servoScan();
-  }
-  else if (comando.startsWith("CALIBRAR FRENTE")) {
-    int valor = comando.substring(15).toInt();
-    calibrar("FRENTE", valor);
-  }
-  else if (comando.startsWith("CALIBRAR GIRO")) {
-    int valor = comando.substring(13).toInt();
-    calibrar("GIRO", valor);
-  }
-  else if (comando == "PARAR") {
-    parar();
-    servoScanning = false;
-  }
-  else {
-    Serial.println("Comando desconhecido.");
-  }
+  if (comando.startsWith("FRENTE")) andarFrente(comando.substring(7).toInt());
+  else if (comando.startsWith("ESQUERDA")) curvaEsquerda(comando.substring(9).toInt());
+  else if (comando.startsWith("DIREITA")) curvaDireita(comando.substring(8).toInt());
+  else if (comando.startsWith("SERVO ")) moverServo(comando.substring(6).toInt());
+  else if (comando == "SERVO_SCAN") servoScan();
+  else if (comando.startsWith("CALIBRAR FRENTE")) calibrar("FRENTE", comando.substring(15).toInt());
+  else if (comando.startsWith("CALIBRAR GIRO")) calibrar("GIRO", comando.substring(13).toInt());
+  else if (comando.startsWith("SALVAR ")) salvarComandoNaEEPROM(comando.substring(7));
+  else if (comando == "RODAR_SALVOS") executarComandosSalvos();
+  else if (comando == "LIMPAR_MEMORIA") limparEEPROM();
+  else if (comando == "PARAR") parar();
+  else Serial.println("Comando desconhecido.");
 }
 
 // ---------------------------
@@ -167,7 +208,7 @@ void processarComando(String comando) {
 // ---------------------------
 void setup() {
   Serial.begin(9600);
-  
+
   pinMode(MOTOR_ESQ_FRENTE, OUTPUT);
   pinMode(MOTOR_ESQ_TRAS, OUTPUT);
   pinMode(MOTOR_DIR_FRENTE, OUTPUT);
@@ -176,7 +217,12 @@ void setup() {
   meuServo.attach(SERVO_PIN);
   meuServo.write(0);
 
-  Serial.println("Carrinho com servo pronto! Aguardando comandos Bluetooth...");
+  // Recupera quantidade de comandos salvos
+  totalComandos = EEPROM.read(EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN);
+
+  Serial.println("Carrinho com EEPROM e Servo pronto! Aguardando comandos Bluetooth...");
+  Serial.print("Comandos salvos: ");
+  Serial.println(totalComandos);
 }
 
 // ---------------------------
@@ -187,7 +233,4 @@ void loop() {
     String comando = Serial.readStringUntil('\n');
     processarComando(comando);
   }
-
-  // se quiser que o servo continue varrendo continuamente:
-  // if (servoScanning) servoScan();
 }
