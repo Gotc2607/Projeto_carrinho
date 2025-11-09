@@ -1,32 +1,40 @@
 #include <Arduino.h>
 #include <EEPROM.h>
+#include <Servo.h>
 
-// ================================
-// CONFIGURAÇÃO DE PINOS
-// ================================
+// ---------------------------
+// CONFIGURAÇÃO DOS PINOS
+// ---------------------------
 #define MOTOR_ESQ_FRENTE 5
 #define MOTOR_ESQ_TRAS   4
 #define MOTOR_DIR_FRENTE 3
 #define MOTOR_DIR_TRAS   2
+#define SERVO_PIN        6
 
-// ================================
-// CONSTANTES DE CALIBRAÇÃO
-// ================================
-const int TEMPO_BASE_CM = 50;     // ms por cm (ajustar conforme o carrinho)
-const int TEMPO_BASE_GRAUS = 10;  // ms por grau (ajustar após testes)
-const int MAX_COMANDOS = 50;      // quantidade máxima de comandos que pode gravar
+// ---------------------------
+// VARIÁVEIS DE CALIBRAÇÃO
+// ---------------------------
+int TEMPO_BASE_CM = 50;     // tempo em ms por cm (ajustável)
+int TEMPO_BASE_GRAUS = 15;  // tempo em ms por grau (ajustável)
 
-// ================================
-// ESTRUTURA DE COMANDO
-// ================================
-struct Movimento {
-  char tipo;      // 'F' = Frente, 'E' = Esquerda, 'D' = Direita
-  float valor;    // distância (cm) ou ângulo (graus)
-};
+// ---------------------------
+// SERVO
+// ---------------------------
+Servo meuServo;
+int posicaoServo = 0;
+bool servoScanning = false; // controle para varredura automática
 
-// ================================
-// FUNÇÕES DE MOTORES
-// ================================
+// ---------------------------
+// MEMÓRIA (EEPROM)
+// ---------------------------
+#define EEPROM_END_COMANDOS 0
+#define MAX_COMANDOS 20
+String comandosSalvos[MAX_COMANDOS];
+int totalComandos = 0;
+
+// ---------------------------
+// FUNÇÕES DE MOVIMENTO
+// ---------------------------
 void parar() {
   digitalWrite(MOTOR_ESQ_FRENTE, LOW);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
@@ -34,173 +42,152 @@ void parar() {
   digitalWrite(MOTOR_DIR_TRAS, LOW);
 }
 
-void frente() {
+void andarFrente(int distancia) {
   digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
   digitalWrite(MOTOR_DIR_FRENTE, HIGH);
   digitalWrite(MOTOR_DIR_TRAS, LOW);
+  delay(distancia * TEMPO_BASE_CM);
+  parar();
 }
 
-void curvaEsquerda() {
+void curvaEsquerda(int graus) {
   digitalWrite(MOTOR_ESQ_FRENTE, LOW);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
   digitalWrite(MOTOR_DIR_FRENTE, HIGH);
   digitalWrite(MOTOR_DIR_TRAS, LOW);
+  delay(graus * TEMPO_BASE_GRAUS);
+  parar();
 }
 
-void curvaDireita() {
+void curvaDireita(int graus) {
   digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
   digitalWrite(MOTOR_DIR_FRENTE, LOW);
   digitalWrite(MOTOR_DIR_TRAS, LOW);
-}
-
-// ================================
-// MOVIMENTOS BASEADOS EM TEMPO
-// ================================
-void moverFrente(float distancia_cm) {
-  long tempo = distancia_cm * TEMPO_BASE_CM;
-  frente();
-  delay(tempo);
+  delay(graus * TEMPO_BASE_GRAUS);
   parar();
 }
 
-void girarEsquerda(float angulo_graus) {
-  long tempo = angulo_graus * TEMPO_BASE_GRAUS;
-  curvaEsquerda();
-  delay(tempo);
-  parar();
+// ---------------------------
+// CONTROLE DO SERVO
+// ---------------------------
+void moverServo(int angulo) {
+  servoScanning = false; // interrompe modo automático, se ativo
+  if (angulo < 0) angulo = 0;
+  if (angulo > 180) angulo = 180;
+  meuServo.write(angulo);
+  posicaoServo = angulo;
+  Serial.print("Servo movido para: ");
+  Serial.println(angulo);
 }
 
-void girarDireita(float angulo_graus) {
-  long tempo = angulo_graus * TEMPO_BASE_GRAUS;
-  curvaDireita();
-  delay(tempo);
-  parar();
-}
+void servoScan() {
+  servoScanning = true;
+  Serial.println("Iniciando varredura automática do servo...");
 
-// ================================
-// EEPROM - ARMAZENAMENTO DE MOVIMENTOS
-// ================================
-int totalComandos = 0;
-
-void salvarMovimento(char tipo, float valor) {
-  if (totalComandos >= MAX_COMANDOS) {
-    Serial.println("⚠️ Memória cheia! Não é possível salvar mais comandos.");
-    return;
+  for (int ang = 0; ang <= 90 && servoScanning; ang++) {
+    meuServo.write(ang);
+    delay(15);
   }
-  Movimento m;
-  m.tipo = tipo;
-  m.valor = valor;
-  EEPROM.put(totalComandos * sizeof(Movimento), m);
-  totalComandos++;
-  EEPROM.put(EEPROM.length() - sizeof(int), totalComandos); // grava total no final da EEPROM
-  Serial.println("Comando salvo na memória.");
-}
-
-void carregarTotalComandos() {
-  EEPROM.get(EEPROM.length() - sizeof(int), totalComandos);
-  if (totalComandos < 0 || totalComandos > MAX_COMANDOS) totalComandos = 0;
-}
-
-void limparMemoria() {
-  for (int i = 0; i < EEPROM.length(); i++) EEPROM.write(i, 0);
-  totalComandos = 0;
-  Serial.println("Memória limpa!");
-}
-
-void replayMovimentos() {
-  Serial.print("Reproduzindo ");
-  Serial.print(totalComandos);
-  Serial.println(" comandos gravados...");
-
-  for (int i = 0; i < totalComandos; i++) {
-    Movimento m;
-    EEPROM.get(i * sizeof(Movimento), m);
-
-    if (m.tipo == 'F') moverFrente(m.valor);
-    else if (m.tipo == 'E') girarEsquerda(m.valor);
-    else if (m.tipo == 'D') girarDireita(m.valor);
-
-    delay(500); // pequena pausa entre comandos
+  delay(100);
+  for (int ang = 90; ang >= 0 && servoScanning; ang--) {
+    meuServo.write(ang);
+    delay(15);
   }
-  Serial.println("Reprodução finalizada.");
+
+  servoScanning = false;
+  Serial.println("Varredura concluída.");
 }
 
-// ================================
-// COMUNICAÇÃO BLUETOOTH
-// ================================
-String comando = "";
+// ---------------------------
+// CALIBRAÇÃO
+// ---------------------------
+void calibrar(String tipo, int valor) {
+  if (tipo == "FRENTE") {
+    TEMPO_BASE_CM = valor;
+    Serial.print("Novo tempo base por cm: ");
+    Serial.println(TEMPO_BASE_CM);
+  } else if (tipo == "GIRO") {
+    TEMPO_BASE_GRAUS = valor;
+    Serial.print("Novo tempo base por grau: ");
+    Serial.println(TEMPO_BASE_GRAUS);
+  } else {
+    Serial.println("Tipo de calibração inválido!");
+  }
+}
 
+// ---------------------------
+// PROCESSAMENTO DE COMANDOS
+// ---------------------------
+void processarComando(String comando) {
+  comando.trim();
+  comando.toUpperCase(); // ignora diferença de maiúsculas/minúsculas
+  Serial.print("Recebido: ");
+  Serial.println(comando);
+
+  if (comando.startsWith("FRENTE")) {
+    int valor = comando.substring(7).toInt();
+    andarFrente(valor);
+  } 
+  else if (comando.startsWith("ESQUERDA")) {
+    int valor = comando.substring(9).toInt();
+    curvaEsquerda(valor);
+  } 
+  else if (comando.startsWith("DIREITA")) {
+    int valor = comando.substring(8).toInt();
+    curvaDireita(valor);
+  }
+  else if (comando.startsWith("SERVO ")) {
+    int angulo = comando.substring(6).toInt();
+    moverServo(angulo);
+  }
+  else if (comando == "SERVO_SCAN") {
+    servoScan();
+  }
+  else if (comando.startsWith("CALIBRAR FRENTE")) {
+    int valor = comando.substring(15).toInt();
+    calibrar("FRENTE", valor);
+  }
+  else if (comando.startsWith("CALIBRAR GIRO")) {
+    int valor = comando.substring(13).toInt();
+    calibrar("GIRO", valor);
+  }
+  else if (comando == "PARAR") {
+    parar();
+    servoScanning = false;
+  }
+  else {
+    Serial.println("Comando desconhecido.");
+  }
+}
+
+// ---------------------------
+// SETUP
+// ---------------------------
 void setup() {
-  Serial.begin(9600); // comunicação com módulo Bluetooth (TX/RX)
-
+  Serial.begin(9600);
+  
   pinMode(MOTOR_ESQ_FRENTE, OUTPUT);
   pinMode(MOTOR_ESQ_TRAS, OUTPUT);
   pinMode(MOTOR_DIR_FRENTE, OUTPUT);
   pinMode(MOTOR_DIR_TRAS, OUTPUT);
 
-  parar();
-  carregarTotalComandos();
+  meuServo.attach(SERVO_PIN);
+  meuServo.write(0);
 
-  Serial.println("Carrinho pronto! Aguardando comandos Bluetooth...");
-  Serial.print("Comandos gravados na memória: ");
-  Serial.println(totalComandos);
+  Serial.println("Carrinho com servo pronto! Aguardando comandos Bluetooth...");
 }
 
+// ---------------------------
+// LOOP PRINCIPAL
+// ---------------------------
 void loop() {
   if (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n') {
-      comando.trim();
-      Serial.print("Recebido: ");
-      Serial.println(comando);
-      processarComando(comando);
-      comando = "";
-    } else {
-      comando += c;
-    }
+    String comando = Serial.readStringUntil('\n');
+    processarComando(comando);
   }
-}
 
-// ================================
-// INTERPRETAÇÃO DOS COMANDOS
-// ================================
-void processarComando(String cmd) {
-  cmd.trim();
-  cmd.toUpperCase();
-
-  if (cmd.startsWith("FRENTE")) {
-    float dist = cmd.substring(7).toFloat();
-    Serial.print("Andando para frente ");
-    Serial.println(dist);
-    moverFrente(dist);
-    salvarMovimento('F', dist);
-  } 
-  else if (cmd.startsWith("ESQUERDA")) {
-    float ang = cmd.substring(9).toFloat();
-    Serial.print("Virando à esquerda ");
-    Serial.println(ang);
-    girarEsquerda(ang);
-    salvarMovimento('E', ang);
-  } 
-  else if (cmd.startsWith("DIREITA")) {
-    float ang = cmd.substring(8).toFloat();
-    Serial.print("Virando à direita ");
-    Serial.println(ang);
-    girarDireita(ang);
-    salvarMovimento('D', ang);
-  } 
-  else if (cmd == "PARAR") {
-    parar();
-  } 
-  else if (cmd == "REPLAY") {
-    replayMovimentos();
-  } 
-  else if (cmd == "LIMPAR") {
-    limparMemoria();
-  } 
-  else {
-    Serial.println("Comando desconhecido!");
-  }
+  // se quiser que o servo continue varrendo continuamente:
+  // if (servoScanning) servoScan();
 }
