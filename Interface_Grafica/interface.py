@@ -3,6 +3,7 @@
 # =================================================================
 import tkinter as tk
 from tkinter import ttk
+import math  # <--- LINHA ADICIONADA
 import serial
 import serial.tools.list_ports
 import threading
@@ -89,9 +90,9 @@ def update_gui():
                        canvas_x + ROBOT_RADIUS, canvas_y + ROBOT_RADIUS,
                        fill="red", outline="black")
     
-    # Linha de orientação
-    end_x = canvas_x + ROBOT_RADIUS * 1.5 * tk.math.cos(tk.math.radians(-robot_theta))
-    end_y = canvas_y + ROBOT_RADIUS * 1.5 * tk.math.sin(tk.math.radians(-robot_theta))
+    # Linha de orientação - CORRIGIDO: usando math em vez de tk.math
+    end_x = canvas_x + ROBOT_RADIUS * 1.5 * math.cos(math.radians(-robot_theta))
+    end_y = canvas_y + ROBOT_RADIUS * 1.5 * math.sin(math.radians(-robot_theta))
     canvas.create_line(canvas_x, canvas_y, end_x, end_y, fill="black", width=2)
 
     # Agenda a próxima atualização
