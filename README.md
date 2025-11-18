@@ -1,4 +1,4 @@
-# 🤖 OncoMap - Robô Entregador Controlado via Interface Gráfica
+# 🤖 Robô Entregador Controlado via Interface Gráfica
 
 Este projeto consiste em um sistema completo para controle de um carrinho robótico (4WD) através de uma interface gráfica (GUI) desenvolvida em Python. O sistema permite planejar rotas, visualizar o caminho estimado em tempo real (Dead Reckoning) e executar tarefas de entrega utilizando um braço robótico (Servo Motor).
 
