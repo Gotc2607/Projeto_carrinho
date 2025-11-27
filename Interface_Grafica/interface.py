@@ -21,7 +21,7 @@ robot_x, robot_y, robot_theta = 0, 0, 0 # X(cm), Y(cm), Theta(graus)
 path_points = []
 
 # =================================================================
-# FUNÇÕES DE LÓGICA E SIMULAÇÃO (NOVO)
+# FUNÇÕES DE LÓGICA E SIMULAÇÃO
 # =================================================================
 def simular_movimento(cmd_str):
     """Calcula a nova posição do robô virtual baseado no comando enviado"""
@@ -37,8 +37,6 @@ def simular_movimento(cmd_str):
         except ValueError:
             valor = 0
 
-    # Converte o ângulo atual para radianos para usar no seno/cosseno
-    # Nota: Na matemática padrão, 0 é direita, 90 é cima.
     rad = math.radians(robot_theta)
 
     if tipo == "FRENTE":
@@ -52,7 +50,6 @@ def simular_movimento(cmd_str):
     elif tipo == "DIREITA":
         robot_theta -= valor
     
-    # Mantém o ângulo entre 0 e 360 (opcional, mas bom para limpeza)
     robot_theta = robot_theta % 360
 
 # =================================================================
@@ -65,16 +62,15 @@ def connect_serial():
         status_label.config(text="Erro: Nenhuma porta selecionada")
         return
     try:
-        # ATENÇÃO: Baud rate ajustado para 115200 para bater com o Arduino novo
-        ser = serial.Serial(port, 115200, timeout=1)
-        time.sleep(2) # Espera o Arduino reiniciar
+        # ATENÇÃO: Baud rate ajustado para 9600 para igualar ao Arduino
+        ser = serial.Serial(port, 9600, timeout=1)
+        time.sleep(2) # Espera o Arduino reiniciar após conexão serial
         status_label.config(text=f"Conectado a {port}")
         connect_button.config(state="disabled")
         disconnect_button.config(state="normal")
         
-        # Inicia a thread para ler respostas do Arduino (Debug)
-        thread = threading.Thread(target=read_from_serial, daemon=True)
-        thread.start()
+        # Inicia thread de leitura
+        threading.Thread(target=read_from_serial, daemon=True).start()
     except serial.SerialException as e:
         status_label.config(text=f"Erro ao conectar: {e}")
 
@@ -100,32 +96,28 @@ def read_from_serial():
 # FUNÇÕES DA GUI
 # =================================================================
 def update_gui():
-    # Converte coordenadas do robô (cm) para coordenadas do canvas (pixels)
-    # Origem (0,0) do robô será o CENTRO da tela
     canvas_x = (CANVAS_WIDTH / 2) + (robot_x * SCALE)
-    canvas_y = (CANVAS_HEIGHT / 2) - (robot_y * SCALE) # Y invertido no Tkinter
+    canvas_y = (CANVAS_HEIGHT / 2) - (robot_y * SCALE) 
 
-    # Adiciona ponto ao rastro se o robô se moveu
     if len(path_points) == 0 or (path_points[-1][0] != canvas_x or path_points[-1][1] != canvas_y):
        path_points.append((canvas_x, canvas_y))
 
     canvas.delete("all")
     
-    # Desenha grade (opcional, para referência)
+    # Grade
     canvas.create_line(CANVAS_WIDTH/2, 0, CANVAS_WIDTH/2, CANVAS_HEIGHT, fill="#ddd")
     canvas.create_line(0, CANVAS_HEIGHT/2, CANVAS_WIDTH, CANVAS_HEIGHT/2, fill="#ddd")
 
-    # Desenha o caminho
+    # Caminho
     if len(path_points) > 1:
         canvas.create_line(path_points, fill="blue", width=2)
     
-    # Desenha o robô
+    # Robô
     canvas.create_oval(canvas_x - ROBOT_RADIUS, canvas_y - ROBOT_RADIUS,
                        canvas_x + ROBOT_RADIUS, canvas_y + ROBOT_RADIUS,
                        fill="red", outline="black")
     
-    # Linha de orientação (Nariz do robô)
-    # Como o Y do canvas cresce para baixo, invertemos o seno visualmente
+    # Orientação
     end_x = canvas_x + ROBOT_RADIUS * 1.5 * math.cos(math.radians(robot_theta))
     end_y = canvas_y - ROBOT_RADIUS * 1.5 * math.sin(math.radians(robot_theta))
     canvas.create_line(canvas_x, canvas_y, end_x, end_y, fill="black", width=3)
@@ -154,11 +146,36 @@ def send_commands():
     commands = command_listbox.get(0, tk.END)
     status_label.config(text="Executando fila...")
     
-    # Roda em uma thread separada para não travar a tela enquanto espera
     def run_queue():
         for cmd in commands:
+            # --- TRADUÇÃO DE PROTOCOLO (Python -> Arduino) ---
+            parts = cmd.split()
+            acao = parts[0]
+            val = parts[1] if len(parts) > 1 else "0"
+            
+            cmd_arduino = ""
+            tempo_espera = 1.0 # Tempo base para não atropelar comandos
+
+            if acao == "FRENTE":
+                cmd_arduino = f"F({val})\\"
+                tempo_espera = (float(val) * 0.05) + 0.5 # Ajuste este fator conforme velocidade real
+            elif acao == "TRAS":
+                cmd_arduino = f"T({val})\\" # Novo comando T no Arduino
+                tempo_espera = (float(val) * 0.05) + 0.5
+            elif acao == "DIREITA":
+                cmd_arduino = f"D({val})\\"
+                tempo_espera = 1.0
+            elif acao == "ESQUERDA":
+                cmd_arduino = f"E({val})\\"
+                tempo_espera = 1.0
+            elif acao == "ENTREGAR":
+                cmd_arduino = "S(90)\\" # Exemplo: move servo para 90
+                tempo_espera = 1.5
+
             # 1. Envia para o Arduino Real
-            ser.write((cmd + '\n').encode('utf-8'))
+            if cmd_arduino:
+                print(f"Enviando Serial: {cmd_arduino}")
+                ser.write(cmd_arduino.encode('utf-8'))
             
             # 2. Simula na Interface Virtual
             simular_movimento(cmd)
@@ -166,9 +183,8 @@ def send_commands():
             # 3. Atualiza a tela
             root.after(0, update_gui)
             
-            # Pausa para dar efeito de animação e tempo para o robô físico andar
-            # Ajuste este tempo se o robô real for mais lento
-            time.sleep(0.8) 
+            # 4. Pausa para o robô físico ter tempo de executar
+            time.sleep(tempo_espera) 
             
         status_label.config(text=f"Concluído: {len(commands)} comandos")
 
@@ -184,7 +200,7 @@ def reset_path():
 # SETUP DA JANELA PRINCIPAL
 # =================================================================
 root = tk.Tk()
-root.title("OncoMap / Carrinho Control (Simulado)")
+root.title("OncoMap / Carrinho Control (Integrado)")
 
 main_frame = ttk.Frame(root, padding="10")
 main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -199,7 +215,10 @@ controls_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N), padx=5, pady=5)
 
 port_label = ttk.Label(controls_frame, text="Porta Serial:")
 port_label.grid(row=0, column=0, sticky=tk.W)
-ports = [port.device for port in serial.tools.list_ports.comports()]
+try:
+    ports = [port.device for port in serial.tools.list_ports.comports()]
+except:
+    ports = []
 port_combobox = ttk.Combobox(controls_frame, values=ports)
 port_combobox.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E))
 if ports: port_combobox.current(0)
@@ -222,7 +241,7 @@ cmd_type_menu.grid(row=0, column=0, sticky=(tk.W, tk.E))
 
 cmd_value_entry = ttk.Entry(cmd_frame, width=10)
 cmd_value_entry.grid(row=0, column=1, padx=5)
-cmd_value_entry.insert(0, "10") # Valor padrão
+cmd_value_entry.insert(0, "10") 
 
 add_cmd_button = ttk.Button(cmd_frame, text="Adicionar", command=add_command)
 add_cmd_button.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)

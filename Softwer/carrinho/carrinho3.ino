@@ -27,6 +27,9 @@ int TEMPO_BASE_GRAUS = 15; // tempo em ms por grau (ajustável)
 Servo meuServo;
 int posicaoServo = 0;
 bool servoScanning = false;
+unsigned long lastServoMove = 0;
+int servoScanAngle = 0;
+bool servoScanDirection = true;
 
 // ---------------------------
 // MEMÓRIA (EEPROM)
@@ -48,34 +51,55 @@ void parar() {
 }
 
 void andarFrente(int distancia) {
+  if (distancia <= 0) {
+    Serial.println("Distância inválida para FRENTE");
+    return;
+  }
+  if (distancia > 1000) distancia = 1000; // Limite de segurança
+  
   digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
   digitalWrite(MOTOR_DIR_FRENTE, HIGH);
   digitalWrite(MOTOR_DIR_TRAS, LOW);
   Serial.print("Andando FRENTE ");
-  Serial.println(distancia);
+  Serial.print(distancia);
+  Serial.println(" cm");
   delay(distancia * TEMPO_BASE_CM);
   parar();
 }
 
 void curvaEsquerda(int graus) {
+  if (graus <= 0) {
+    Serial.println("Ângulo inválido para ESQUERDA");
+    return;
+  }
+  if (graus > 360) graus = 360; // Limite de segurança
+  
   digitalWrite(MOTOR_ESQ_FRENTE, LOW);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
   digitalWrite(MOTOR_DIR_FRENTE, HIGH);
   digitalWrite(MOTOR_DIR_TRAS, LOW);
   Serial.print("Virando ESQUERDA ");
-  Serial.println(graus);
+  Serial.print(graus);
+  Serial.println(" graus");
   delay(graus * TEMPO_BASE_GRAUS);
   parar();
 }
 
 void curvaDireita(int graus) {
+  if (graus <= 0) {
+    Serial.println("Ângulo inválido para DIREITA");
+    return;
+  }
+  if (graus > 360) graus = 360; // Limite de segurança
+  
   digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
   digitalWrite(MOTOR_DIR_FRENTE, LOW);
   digitalWrite(MOTOR_DIR_TRAS, LOW);
   Serial.print("Virando DIREITA ");
-  Serial.println(graus);
+  Serial.print(graus);
+  Serial.println(" graus");
   delay(graus * TEMPO_BASE_GRAUS);
   parar();
 }
@@ -93,21 +117,34 @@ void moverServo(int angulo) {
   Serial.println(angulo);
 }
 
-void servoScan() {
+void iniciarServoScan() {
   servoScanning = true;
+  servoScanAngle = 0;
+  servoScanDirection = true;
   Serial.println("Iniciando varredura do servo...");
+}
 
-  for (int ang = 0; ang <= 90 && servoScanning; ang++) {
-    meuServo.write(ang);
-    delay(15);
+void atualizarServoScan() {
+  if (!servoScanning) return;
+  
+  if (millis() - lastServoMove >= 15) {
+    if (servoScanDirection) {
+      servoScanAngle++;
+      if (servoScanAngle >= 90) {
+        servoScanDirection = false;
+      }
+    } else {
+      servoScanAngle--;
+      if (servoScanAngle <= 0) {
+        servoScanDirection = true;
+        servoScanning = false;
+        Serial.println("Varredura concluída.");
+      }
+    }
+    
+    meuServo.write(servoScanAngle);
+    lastServoMove = millis();
   }
-  for (int ang = 90; ang >= 0 && servoScanning; ang--) {
-    meuServo.write(ang);
-    delay(15);
-  }
-
-  servoScanning = false;
-  Serial.println("Varredura concluída.");
 }
 
 // ---------------------------
@@ -136,6 +173,12 @@ void salvarComandoNaEEPROM(String cmd) {
     return;
   }
 
+  cmd.trim();
+  if (cmd.length() == 0) {
+    Serial.println("Comando vazio não salvo!");
+    return;
+  }
+
   int addr = EEPROM_END_COMANDOS + totalComandos * MAX_COMANDO_LEN;
   for (int i = 0; i < MAX_COMANDO_LEN; i++) {
     if (i < cmd.length()) EEPROM.write(addr + i, cmd[i]);
@@ -145,7 +188,11 @@ void salvarComandoNaEEPROM(String cmd) {
   totalComandos++;
   EEPROM.write(EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN, totalComandos);
 
-  Serial.print("Comando salvo: ");
+  Serial.print("Comando salvo (");
+  Serial.print(totalComandos);
+  Serial.print("/");
+  Serial.print(MAX_COMANDOS);
+  Serial.print("): ");
   Serial.println(cmd);
 }
 
@@ -162,10 +209,19 @@ String lerComandoDaEEPROM(int index) {
 }
 
 void executarComandosSalvos() {
+  if (totalComandos == 0) {
+    Serial.println("Nenhum comando salvo!");
+    return;
+  }
+  
   Serial.println("Executando comandos salvos...");
   for (int i = 0; i < totalComandos; i++) {
     String cmd = lerComandoDaEEPROM(i);
-    Serial.print("> ");
+    Serial.print("Executando [");
+    Serial.print(i + 1);
+    Serial.print("/");
+    Serial.print(totalComandos);
+    Serial.print("]: ");
     Serial.println(cmd);
     delay(500);
     
@@ -174,21 +230,23 @@ void executarComandosSalvos() {
       cmd.trim();
       cmd.toUpperCase();
       
-      if (cmd.startsWith("FRENTE")) andarFrente(cmd.substring(7).toInt());
-      else if (cmd.startsWith("ESQUERDA")) curvaEsquerda(cmd.substring(9).toInt());
-      else if (cmd.startsWith("DIREITA")) curvaDireita(cmd.substring(8).toInt());
+      if (cmd.startsWith("FRENTE ")) andarFrente(cmd.substring(7).toInt());
+      else if (cmd.startsWith("ESQUERDA ")) curvaEsquerda(cmd.substring(9).toInt());
+      else if (cmd.startsWith("DIREITA ")) curvaDireita(cmd.substring(8).toInt());
       else if (cmd.startsWith("SERVO ")) moverServo(cmd.substring(6).toInt());
-      else if (cmd == "SERVO_SCAN") servoScan();
+      else if (cmd == "SERVO_SCAN") iniciarServoScan();
       else if (cmd == "PARAR") parar();
     }
+    delay(300); // Pequena pausa entre comandos
   }
   Serial.println("Execução concluída.");
 }
 
 void limparEEPROM() {
-  // Limpa apenas o espaço usado, mas garante que o contador seja zero
-  for (int i = EEPROM_END_COMANDOS; i < EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN + 1; i++) {
-    EEPROM.write(i, 0);
+  // Limpa apenas o espaço usado pelos comandos
+  for (int i = 0; i < MAX_COMANDOS; i++) {
+    int addr = EEPROM_END_COMANDOS + i * MAX_COMANDO_LEN;
+    EEPROM.write(addr, 0); // Apenas primeiro byte para marcar como vazio
   }
   totalComandos = 0;
   // Atualiza o contador na EEPROM para 0
@@ -196,13 +254,28 @@ void limparEEPROM() {
   Serial.println("EEPROM limpa!");
 }
 
+void listarComandosSalvos() {
+  if (totalComandos == 0) {
+    Serial.println("Nenhum comando salvo.");
+    return;
+  }
+  
+  Serial.println("Comandos salvos:");
+  for (int i = 0; i < totalComandos; i++) {
+    String cmd = lerComandoDaEEPROM(i);
+    Serial.print("[");
+    Serial.print(i + 1);
+    Serial.print("]: ");
+    Serial.println(cmd);
+  }
+}
+
 // ---------------------------
 // PROCESSAMENTO DE COMANDOS (ROBUSTO)
 // ---------------------------
 void processarComando(String comando) {
   
-  // CORREÇÃO: Remove o caractere de Retorno de Carro ("\r") se ele existir
-  // O uso de aspas duplas resolveu o erro de compilação.
+  // Remove o caractere de Retorno de Carro ("\r") se existir
   if (comando.endsWith("\r")) {
     comando.remove(comando.length() - 1);
   }
@@ -210,7 +283,7 @@ void processarComando(String comando) {
   // Remove espaços em branco no início e fim
   comando.trim();
   
-  // CORREÇÃO: Se o comando for vazio após o trim/remove, ignore.
+  // Se o comando for vazio após o trim/remove, ignore
   if (comando.length() == 0) {
     return;
   }
@@ -218,22 +291,62 @@ void processarComando(String comando) {
   // Converte para maiúsculas para fácil comparação
   comando.toUpperCase(); 
 
-  Serial.print("Recebido (Limpo): ");
+  Serial.print("Recebido: ");
   Serial.println(comando);
 
-  if (comando.startsWith("FRENTE")) andarFrente(comando.substring(7).toInt());
-  else if (comando.startsWith("ESQUERDA")) curvaEsquerda(comando.substring(9).toInt());
-  else if (comando.startsWith("DIREITA")) curvaDireita(comando.substring(8).toInt());
-  else if (comando.startsWith("SERVO ")) moverServo(comando.substring(6).toInt());
-  else if (comando == "SERVO_SCAN") servoScan();
-  else if (comando.startsWith("CALIBRAR FRENTE")) calibrar("FRENTE", comando.substring(15).toInt());
-  else if (comando.startsWith("CALIBRAR GIRO")) calibrar("GIRO", comando.substring(13).toInt());
-  // O comando SALVAR precisa de uma string logo após o "SALVAR "
-  else if (comando.startsWith("SALVAR ")) salvarComandoNaEEPROM(comando.substring(7));
-  else if (comando == "RODAR_SALVOS") executarComandosSalvos();
-  else if (comando == "LIMPAR_MEMORIA") limparEEPROM();
-  else if (comando == "PARAR") parar();
-  else Serial.println("Comando desconhecido.");
+  // Processamento robusto com verificação de parâmetros
+  if (comando.startsWith("FRENTE ")) {
+    andarFrente(comando.substring(7).toInt());
+  }
+  else if (comando.startsWith("ESQUERDA ")) {
+    curvaEsquerda(comando.substring(9).toInt());
+  }
+  else if (comando.startsWith("DIREITA ")) {
+    curvaDireita(comando.substring(8).toInt());
+  }
+  else if (comando.startsWith("SERVO ")) {
+    moverServo(comando.substring(6).toInt());
+  }
+  else if (comando == "SERVO_SCAN") {
+    iniciarServoScan();
+  }
+  else if (comando.startsWith("CALIBRAR FRENTE ")) {
+    calibrar("FRENTE", comando.substring(16).toInt());
+  }
+  else if (comando.startsWith("CALIBRAR GIRO ")) {
+    calibrar("GIRO", comando.substring(14).toInt());
+  }
+  else if (comando.startsWith("SALVAR ")) {
+    String cmdParaSalvar = comando.substring(7);
+    if (cmdParaSalvar.length() > 0) {
+      salvarComandoNaEEPROM(cmdParaSalvar);
+    } else {
+      Serial.println("Erro: Comando vazio após SALVAR");
+    }
+  }
+  else if (comando == "RODAR_SALVOS") {
+    executarComandosSalvos();
+  }
+  else if (comando == "LISTAR_SALVOS") {
+    listarComandosSalvos();
+  }
+  else if (comando == "LIMPAR_MEMORIA") {
+    limparEEPROM();
+  }
+  else if (comando == "PARAR") {
+    parar();
+  }
+  else if (comando == "AJUDA" || comando == "HELP") {
+    Serial.println("Comandos disponíveis:");
+    Serial.println("FRENTE [distancia], ESQUERDA [graus], DIREITA [graus]");
+    Serial.println("SERVO [angulo], SERVO_SCAN, PARAR");
+    Serial.println("CALIBRAR FRENTE [valor], CALIBRAR GIRO [valor]");
+    Serial.println("SALVAR [comando], RODAR_SALVOS, LISTAR_SALVOS");
+    Serial.println("LIMPAR_MEMORIA, AJUDA");
+  }
+  else {
+    Serial.println("Comando desconhecido. Digite AJUDA para ver opções.");
+  }
 }
 
 // ---------------------------
@@ -252,24 +365,29 @@ void setup() {
   meuServo.attach(SERVO_PIN);
   meuServo.write(0);
 
-  // Recupera quantidade de comandos salvos
+  // Recupera quantidade de comandos salvos (APENAS LEITURA)
   totalComandos = EEPROM.read(EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN);
+  // Sanity check
+  if (totalComandos > MAX_COMANDOS) totalComandos = 0;
 
-  Serial.println("Carrinho com EEPROM e Servo pronto! Aguardando comandos Bluetooth...");
-  meuBT.println("Aguardando comandos Bluetooth...");
-  Serial.print("Comandos salvos: ");
+  Serial.println("=== CARRINHO ROBÓTICO PRONTO ===");
+  Serial.println("Aguardando comandos Bluetooth...");
+  meuBT.println("Carrinho pronto! Envie comandos.");
+  Serial.print("Comandos salvos na memória: ");
   Serial.println(totalComandos);
+  Serial.println("Digite 'AJUDA' para ver comandos disponíveis");
 }
 
 // ---------------------------
 // LOOP PRINCIPAL (FINAL)
 // ---------------------------
 void loop() {
+  // Verifica comandos Bluetooth
   if (meuBT.available()) {
-    // Lê a string até encontrar a quebra de linha ('\n')
     String comando = meuBT.readStringUntil('\n');
-    
-    // Envia para o processamento
     processarComando(comando);
   }
+  
+  // Atualiza varredura do servo (não-bloqueante)
+  atualizarServoScan();
 }
