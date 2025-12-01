@@ -1,5 +1,6 @@
 # =================================================================
 # == INTERFACE GRÁFICA PARA CONTROLE E VISUALIZAÇÃO DO CARRINHO  ==
+# ==               COM PERSISTÊNCIA EM BANCO DE DADOS            ==
 # =================================================================
 import tkinter as tk
 from tkinter import ttk
@@ -8,6 +9,8 @@ import serial
 import serial.tools.list_ports
 import threading
 import time
+import sqlite3
+from datetime import datetime
 
 # --- Constantes da GUI ---
 CANVAS_WIDTH = 600
@@ -19,6 +22,81 @@ ROBOT_RADIUS = 1.5 * SCALE
 ser = None
 robot_x, robot_y, robot_theta = 0, 0, 0 # X(cm), Y(cm), Theta(graus)
 path_points = []
+
+# =================================================================
+# FUNÇÕES DE BANCO DE DADOS (SQLite)
+# =================================================================
+def init_db():
+    """Cria o banco de dados e as tabelas se não existirem"""
+    try:
+        conn = sqlite3.connect('rotas_carrinho.db')
+        cursor = conn.cursor()
+        
+        # Tabela para guardar o cabeçalho da rota
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS rotas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT NOT NULL,
+                data_criacao TEXT
+            )
+        ''')
+        
+        # Tabela para guardar os comandos
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS comandos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rota_id INTEGER,
+                ordem INTEGER,
+                comando TEXT,
+                valor REAL,
+                FOREIGN KEY (rota_id) REFERENCES rotas (id)
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        print("Banco de dados inicializado com sucesso.")
+    except Exception as e:
+        print(f"Erro ao iniciar banco de dados: {e}")
+
+def salvar_rota_db():
+    """Salva a lista atual de comandos no banco de dados"""
+    nome_rota = nome_rota_entry.get()
+    comandos = command_listbox.get(0, tk.END)
+    
+    if not nome_rota:
+        status_label.config(text="Erro: Digite um nome para a rota!")
+        return
+    
+    if not comandos:
+        status_label.config(text="Erro: Lista de comandos vazia!")
+        return
+
+    try:
+        conn = sqlite3.connect('rotas_carrinho.db')
+        cursor = conn.cursor()
+        
+        # 1. Salvar a Rota
+        data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("INSERT INTO rotas (nome, data_criacao) VALUES (?, ?)", (nome_rota, data_atual))
+        rota_id = cursor.lastrowid # Pega o ID gerado
+        
+        # 2. Salvar os Comandos
+        for i, cmd in enumerate(comandos):
+            parts = cmd.split()
+            acao = parts[0]
+            val = float(parts[1]) if len(parts) > 1 else 0.0
+            
+            cursor.execute("INSERT INTO comandos (rota_id, ordem, comando, valor) VALUES (?, ?, ?, ?)", 
+                           (rota_id, i, acao, val))
+            
+        conn.commit()
+        conn.close()
+        
+        status_label.config(text=f"Sucesso: Rota '{nome_rota}' salva!")
+        nome_rota_entry.delete(0, tk.END) # Limpa o campo após salvar
+        
+    except Exception as e:
+        status_label.config(text=f"Erro ao salvar no BD: {e}")
 
 # =================================================================
 # FUNÇÕES DE LÓGICA E SIMULAÇÃO
@@ -53,7 +131,7 @@ def simular_movimento(cmd_str):
     robot_theta = robot_theta % 360
 
 # =================================================================
-# FUNÇÕES DE COMUNICAÇÃO
+# FUNÇÕES DE COMUNICAÇÃO SERIAL
 # =================================================================
 def connect_serial():
     global ser
@@ -62,9 +140,9 @@ def connect_serial():
         status_label.config(text="Erro: Nenhuma porta selecionada")
         return
     try:
-        # ATENÇÃO: Baud rate ajustado para 9600 para igualar ao Arduino
+        # ATENÇÃO: Baud rate 9600 para Arduino padrão
         ser = serial.Serial(port, 9600, timeout=1)
-        time.sleep(2) # Espera o Arduino reiniciar após conexão serial
+        time.sleep(2) # Espera o Arduino reiniciar
         status_label.config(text=f"Conectado a {port}")
         connect_button.config(state="disabled")
         disconnect_button.config(state="normal")
@@ -154,13 +232,13 @@ def send_commands():
             val = parts[1] if len(parts) > 1 else "0"
             
             cmd_arduino = ""
-            tempo_espera = 1.0 # Tempo base para não atropelar comandos
+            tempo_espera = 1.0 
 
             if acao == "FRENTE":
                 cmd_arduino = f"F({val})\\"
-                tempo_espera = (float(val) * 0.05) + 0.5 # Ajuste este fator conforme velocidade real
+                tempo_espera = (float(val) * 0.05) + 0.5 
             elif acao == "TRAS":
-                cmd_arduino = f"T({val})\\" # Novo comando T no Arduino
+                cmd_arduino = f"T({val})\\"
                 tempo_espera = (float(val) * 0.05) + 0.5
             elif acao == "DIREITA":
                 cmd_arduino = f"D({val})\\"
@@ -169,7 +247,7 @@ def send_commands():
                 cmd_arduino = f"E({val})\\"
                 tempo_espera = 1.0
             elif acao == "ENTREGAR":
-                cmd_arduino = "S(90)\\" # Exemplo: move servo para 90
+                cmd_arduino = "S(90)\\" 
                 tempo_espera = 1.5
 
             # 1. Envia para o Arduino Real
@@ -180,7 +258,7 @@ def send_commands():
             # 2. Simula na Interface Virtual
             simular_movimento(cmd)
             
-            # 3. Atualiza a tela
+            # 3. Atualiza a tela (thread-safe para Tkinter)
             root.after(0, update_gui)
             
             # 4. Pausa para o robô físico ter tempo de executar
@@ -199,17 +277,20 @@ def reset_path():
 # =================================================================
 # SETUP DA JANELA PRINCIPAL
 # =================================================================
+# Inicializa o Banco de Dados antes de abrir a janela
+init_db()
+
 root = tk.Tk()
-root.title("OncoMap / Carrinho Control (Integrado)")
+root.title("OncoMap / Carrinho Control (Com Banco de Dados)")
 
 main_frame = ttk.Frame(root, padding="10")
 main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-# --- Canvas ---
+# --- Canvas (Esquerda) ---
 canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken", borderwidth=1)
 canvas.grid(row=0, column=0, rowspan=10, padx=5, pady=5)
 
-# --- Controles ---
+# --- Controles de Conexão (Direita Topo) ---
 controls_frame = ttk.LabelFrame(main_frame, text="Conexão", padding="10")
 controls_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N), padx=5, pady=5)
 
@@ -230,7 +311,7 @@ disconnect_button.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5)
 status_label = ttk.Label(controls_frame, text="Desconectado", relief="sunken", anchor=tk.W)
 status_label.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
-# --- Comandos ---
+# --- Criação de Comandos (Direita Meio) ---
 cmd_frame = ttk.LabelFrame(main_frame, text="Criar Rota", padding="10")
 cmd_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N), padx=5, pady=5)
 
@@ -246,23 +327,37 @@ cmd_value_entry.insert(0, "10")
 add_cmd_button = ttk.Button(cmd_frame, text="Adicionar", command=add_command)
 add_cmd_button.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
-# --- Fila ---
-queue_frame = ttk.LabelFrame(main_frame, text="Fila de Execução", padding="10")
+# --- Fila e Banco de Dados (Direita Baixo) ---
+queue_frame = ttk.LabelFrame(main_frame, text="Fila e Banco de Dados", padding="10")
 queue_frame.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-command_listbox = tk.Listbox(queue_frame, height=15)
+command_listbox = tk.Listbox(queue_frame, height=10)
 command_listbox.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
 
+# Botões de Controle da Fila
 send_button = ttk.Button(queue_frame, text="ENVIAR E RODAR", command=send_commands)
-send_button.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
-clear_button = ttk.Button(queue_frame, text="Limpar", command=clear_commands)
-clear_button.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5)
-reset_path_button = ttk.Button(queue_frame, text="Resetar Mapa", command=reset_path)
-reset_path_button.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E))
+send_button.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=2)
+clear_button = ttk.Button(queue_frame, text="Limpar Lista", command=clear_commands)
+clear_button.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=2)
+
+# Separador Visual
+ttk.Separator(queue_frame, orient='horizontal').grid(row=2, column=0, columnspan=2, sticky='ew', pady=5)
+
+# Controles do Banco de Dados
+ttk.Label(queue_frame, text="Nome da Rota:").grid(row=3, column=0, sticky=tk.W)
+nome_rota_entry = ttk.Entry(queue_frame)
+nome_rota_entry.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=2)
+
+save_db_button = ttk.Button(queue_frame, text="Salvar no Histórico", command=salvar_rota_db)
+save_db_button.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+
+reset_path_button = ttk.Button(queue_frame, text="Resetar Mapa (Tela)", command=reset_path)
+reset_path_button.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E))
 
 # --- Inicialização ---
 update_gui()
 root.mainloop()
 
+# Fecha serial ao sair se estiver aberta
 if ser and ser.is_open:
     ser.close()
