@@ -257,9 +257,22 @@ def send_commands():
     threading.Thread(target=_run_batch, daemon=True).start()
 
 def add_cmd():
-    v = cmd_val.get()
     t = cmd_type.get()
-    command_listbox.insert(tk.END, f"{t} {v}" if t != "ENTREGAR" else t)
+    if t == "ENTREGAR":
+        # Para ENTREGAR, adicione apenas o tipo de comando sem valor
+        command_listbox.insert(tk.END, t)
+    elif t in ["DIREITA", "ESQUERDA"]:
+        # Para DIREITA/ESQUERDA, use o valor atual (graus)
+        v = cmd_val.get()
+        # Se for um comando de rotação, use o valor do campo (que será 0 se estiver oculto)
+        command_listbox.insert(tk.END, f"{t} {90}")
+    else: # FRENTE, TRAS
+        # Para FRENTE/TRAS, use o valor atual (distância)
+        v = cmd_val.get()
+        if not v or not v.replace('.', '', 1).isdigit():
+            messagebox.showwarning("Aviso", "Valor inválido para distância/graus.")
+            return
+        command_listbox.insert(tk.END, f"{t} {v}")
 
 def clear_commands(): command_listbox.delete(0, tk.END)
 def reset_path(): 
@@ -267,6 +280,27 @@ def reset_path():
     path_points.clear(); robot_x=0; robot_y=0; robot_theta=0
     update_gui()
 
+def toggle_val_entry(*args):
+    """Oculta o campo de valor (graus/distancia) se o comando for ENTREGAR, DIREITA ou ESQUERDA."""
+    current_type = cmd_type.get()
+    
+    # Se o comando não for FRENTE ou TRAS, oculta o campo de valor
+    # ENTREGAR é uma exceção que precisa de um valor 0 para funcionar com a sua logica atual,
+    # então vamos manter o campo oculto, mas o valor como 0
+    if current_type in ["DIREITA", "ESQUERDA"]:
+        cmd_val.pack_forget() # Oculta
+        cmd_val.delete(0, tk.END) # Opcional: Limpa o campo
+        cmd_val.insert(0, "90") # Opcional: Insere 0 (Para evitar erro, mas não é usado na add_cmd)
+    else:
+        cmd_val.pack(fill="x", padx=5) # Mostra
+        if current_type == "ENTREGAR":
+            # Para ENTREGAR, queremos o campo oculto mas o valor fixo como 0
+            cmd_val.pack_forget()
+            cmd_val.delete(0, tk.END)
+            cmd_val.insert(0, "0")
+        elif cmd_val.get() == "0":
+             cmd_val.delete(0, tk.END)
+             cmd_val.insert(0, "10") # Volta para um valor padrão
 # =================================================================
 # SETUP GUI
 # =================================================================
@@ -288,7 +322,7 @@ right_panel.grid(row=0, column=1, sticky="ns")
 tabs = ttk.Notebook(right_panel)
 tabs.grid(row=0, column=0, sticky="nsew")
 
-# ABA 1
+# ABA 1 - Controle (Nova estrutura para os comandos)
 tab_controle = ttk.Frame(tabs, padding=10)
 tabs.add(tab_controle, text="Controle")
 
@@ -305,10 +339,21 @@ status_label.pack(anchor="w", padx=5)
 
 lf_cmds = ttk.LabelFrame(tab_controle, text="Comandos")
 lf_cmds.pack(fill="x", pady=5)
+
 cmd_type = tk.StringVar(value="FRENTE")
-ttk.OptionMenu(lf_cmds, cmd_type, "FRENTE", "FRENTE", "TRAS", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x")
-cmd_val = ttk.Entry(lf_cmds); cmd_val.insert(0, "10"); cmd_val.pack(fill="x")
-ttk.Button(lf_cmds, text="Adicionar", command=add_cmd).pack(fill="x")
+# Rastrear a mudança na variável para chamar a função de visibilidade
+cmd_type.trace_add("write", toggle_val_entry) 
+
+ttk.OptionMenu(lf_cmds, cmd_type, "FRENTE", "FRENTE", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x", padx=5)
+
+cmd_val = ttk.Entry(lf_cmds); 
+cmd_val.insert(0, "10"); 
+# Note: Não chamamos pack() aqui. Ele será chamado pela toggle_val_entry() abaixo.
+
+ttk.Button(lf_cmds, text="Adicionar", command=add_cmd).pack(fill="x", padx=5)
+
+# Chama a função uma vez no início para garantir o estado inicial correto (FRENTE)
+toggle_val_entry()
 
 lf_queue = ttk.LabelFrame(tab_controle, text="Fila")
 lf_queue.pack(fill="both", expand=True, pady=5)
