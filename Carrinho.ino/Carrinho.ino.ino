@@ -11,21 +11,29 @@ SoftwareSerial meuBT(10, 11);
 // ---------------------------
 #define MOTOR_ESQ_FRENTE 5
 #define MOTOR_ESQ_TRAS   4
-#define MOTOR_DIR_FRENTE 3
-#define MOTOR_DIR_TRAS   2
+#define MOTOR_DIR_FRENTE 8
+#define MOTOR_DIR_TRAS   7
 #define SERVO_PIN        6
+#define pinoEncoderEsq   2
+#define pinoEncoderDir   3
+#define furosDoDisco     20
+
+// Tamanho da roda
+const float diametroRoda_cm = 6.3;
+const float pi = 3.1415;
+float distanciaEsq = 0;
+float distanciaDir = 0;
+
+// --- Variáveis Encoders ---
+volatile unsigned long pulsosEsq = 0;
+volatile unsigned long pulsosDir = 0;
 
 // ---------------------------
-// VARIÁVEIS DE CALIBRAÇÃO
+// FILA DE EXECUÇÃO (RAM) - ROBUSTO
 // ---------------------------
-int TEMPO_BASE_CM = 30;
-int TEMPO_BASE_GRAUS = 8;
-
-// ---------------------------
-// CONSTANTES DE TEMPO MÍNIMO
-// ---------------------------
-#define TEMPO_MINIMO_CM 15
-#define TEMPO_MINIMO_GRAUS 200
+#define MAX_FILA_RAM 30  // Aguenta até 30 comandos na memória
+char filaRAM[MAX_FILA_RAM][20]; // 20 chars por comando
+byte totalFilaRAM = 0;
 
 // ---------------------------
 // SERVO
@@ -45,97 +53,115 @@ bool servoScanDirection = true;
 #define MAX_COMANDO_LEN 20
 byte totalComandos = 0;
 
+// --- Funções de Interrupção P/ Encoders ---
+void contarEsq() { pulsosEsq++; }
+void contarDir() { pulsosDir++; }
+
 // ---------------------------
 // FUNÇÕES DE MOVIMENTO
 // ---------------------------
+void posicao() {
+    noInterrupts();
+    unsigned long pulsosEsqCopia = pulsosEsq;
+    unsigned long pulsosDirCopia = pulsosDir;
+    pulsosEsq = 0;
+    pulsosDir = 0;
+    interrupts();
+
+    float perimetro = diametroRoda_cm * pi;
+    distanciaEsq = (float)(pulsosEsqCopia / (float)furosDoDisco) * perimetro;
+    distanciaDir = (float)(pulsosDirCopia / (float)furosDoDisco) * perimetro;
+}
+
 void parar() {
   digitalWrite(MOTOR_ESQ_FRENTE, LOW);
   digitalWrite(MOTOR_ESQ_TRAS, LOW);
   digitalWrite(MOTOR_DIR_FRENTE, LOW);
   digitalWrite(MOTOR_DIR_TRAS, LOW);
-  Serial.println(F("Parado."));
 }
 
 void andarFrente(int distancia) {
-  if (distancia <= 0) {
-    Serial.println(F("Distancia invalida"));
-    return;
-  }
-  
-  unsigned long tempoMovimento = distancia * TEMPO_BASE_CM;
-  if (tempoMovimento < TEMPO_MINIMO_CM) {
-    tempoMovimento = TEMPO_MINIMO_CM;
-  }
-  
+  if (distancia <= 0) return;
   if (distancia > 150) distancia = 150;
   
-  Serial.print(F("Andando "));
-  Serial.print(distancia);
-  Serial.println(F("cm"));
+  float distAcumuladaEsq = 0;
+  float distAcumuladaDir = 0;
+  posicao(); // Limpa buffers
   
-  digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
-  digitalWrite(MOTOR_ESQ_TRAS, LOW);
-  digitalWrite(MOTOR_DIR_FRENTE, HIGH);
-  digitalWrite(MOTOR_DIR_TRAS, LOW);
-  
-  delay(tempoMovimento);
+  while(distAcumuladaEsq < distancia && distAcumuladaDir < distancia){
+    digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
+    digitalWrite(MOTOR_ESQ_TRAS, LOW);
+    digitalWrite(MOTOR_DIR_FRENTE, HIGH);
+    digitalWrite(MOTOR_DIR_TRAS, LOW);
+    
+    posicao();
+    distAcumuladaEsq += distanciaEsq;
+    distAcumuladaDir += distanciaDir;
+    delay(10);
+  }
+  parar();
+}
+
+void andarTras(int distancia) {
+  // Implementação simples para trás (inverso do frente)
+  if (distancia <= 0) return;
+  float distAcumulada = 0;
+  posicao();
+  while(distAcumulada < distancia){
+    digitalWrite(MOTOR_ESQ_FRENTE, LOW);
+    digitalWrite(MOTOR_ESQ_TRAS, HIGH);
+    digitalWrite(MOTOR_DIR_FRENTE, LOW);
+    digitalWrite(MOTOR_DIR_TRAS, HIGH);
+    posicao();
+    distAcumulada += distanciaEsq; // Usa um dos encoders como ref
+    delay(10);
+  }
   parar();
 }
 
 void curvaEsquerda(int graus) {
-  if (graus <= 0) {
-    Serial.println(F("Angulo invalido"));
-    return;
-  }
-  
-  unsigned long tempoMovimento = graus * TEMPO_BASE_GRAUS;
-  if (tempoMovimento < TEMPO_MINIMO_GRAUS) {
-    tempoMovimento = TEMPO_MINIMO_GRAUS;
-  }
-  
+  if (graus <= 0) return;
   if (graus > 360) graus = 360;
   
-  Serial.print(F("Esquerda "));
-  Serial.print(graus);
-  Serial.println(F("°"));
-  
-  digitalWrite(MOTOR_ESQ_FRENTE, LOW);
-  digitalWrite(MOTOR_ESQ_TRAS, LOW);
-  digitalWrite(MOTOR_DIR_FRENTE, HIGH);
-  digitalWrite(MOTOR_DIR_TRAS, LOW);
-  
-  delay(tempoMovimento);
+  float distAcumuladaDir = 0;
+  posicao();
+
+  // Calibragem: ajuste o valor 20.5 (distância entre rodas) conforme necessário
+  while((distAcumuladaDir / (20.5 * 0.0174533)) < graus){
+    digitalWrite(MOTOR_ESQ_FRENTE, LOW);
+    digitalWrite(MOTOR_ESQ_TRAS, LOW);
+    digitalWrite(MOTOR_DIR_FRENTE, HIGH);
+    digitalWrite(MOTOR_DIR_TRAS, LOW);
+    
+    posicao();
+    distAcumuladaDir += distanciaDir;
+    delay(10);
+  }
   parar();
 }
 
 void curvaDireita(int graus) {
-  if (graus <= 0) {
-    Serial.println(F("Angulo invalido"));
-    return;
-  }
-  
-  unsigned long tempoMovimento = graus * TEMPO_BASE_GRAUS;
-  if (tempoMovimento < TEMPO_MINIMO_GRAUS) {
-    tempoMovimento = TEMPO_MINIMO_GRAUS;
-  }
-  
+  if (graus <= 0) return;
   if (graus > 360) graus = 360;
   
-  Serial.print(F("Direita "));
-  Serial.print(graus);
-  Serial.println(F("°"));
-  
-  digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
-  digitalWrite(MOTOR_ESQ_TRAS, LOW);
-  digitalWrite(MOTOR_DIR_FRENTE, LOW);
-  digitalWrite(MOTOR_DIR_TRAS, LOW);
-  
-  delay(tempoMovimento);
+  float distAcumuladaEsq = 0;
+  posicao();
+
+  while((distAcumuladaEsq / (20.5 * 0.0174533)) < graus){
+    digitalWrite(MOTOR_ESQ_FRENTE, HIGH);
+    digitalWrite(MOTOR_ESQ_TRAS, LOW);
+    digitalWrite(MOTOR_DIR_FRENTE, LOW);
+    digitalWrite(MOTOR_DIR_TRAS, LOW);
+    
+    posicao();
+    distAcumuladaEsq += distanciaEsq;
+    delay(10);
+  }
   parar();
 }
 
 // ---------------------------
-// CONTROLE DO SERVO
+// SERVO
 // ---------------------------
 void moverServo(int angulo) {
   servoScanning = false;
@@ -143,20 +169,16 @@ void moverServo(int angulo) {
   if (angulo > 180) angulo = 180;
   meuServo.write(angulo);
   posicaoServo = angulo;
-  Serial.print(F("Servo: "));
-  Serial.println(angulo);
 }
 
 void iniciarServoScan() {
   servoScanning = true;
   servoScanAngle = 0;
   servoScanDirection = true;
-  Serial.println(F("Scan servo..."));
 }
 
 void atualizarServoScan() {
   if (!servoScanning) return;
-  
   if (millis() - lastServoMove >= 20) {
     if (servoScanDirection) {
       servoScanAngle++;
@@ -166,7 +188,6 @@ void atualizarServoScan() {
       if (servoScanAngle <= 0) {
         servoScanDirection = true;
         servoScanning = false;
-        Serial.println(F("Scan completo"));
       }
     }
     meuServo.write(servoScanAngle);
@@ -175,283 +196,122 @@ void atualizarServoScan() {
 }
 
 // ---------------------------
-// CALIBRAÇÃO
+// GERENCIAMENTO DA FILA RAM (HANDSHAKE)
 // ---------------------------
-void calibrar(const char* tipo, int valor) {
-  if (strcmp(tipo, "FRENTE") == 0) {
-    TEMPO_BASE_CM = valor;
-    Serial.print(F("Novo tempo cm: "));
-    Serial.println(TEMPO_BASE_CM);
-  } else if (strcmp(tipo, "GIRO") == 0) {
-    TEMPO_BASE_GRAUS = valor;
-    Serial.print(F("Novo tempo grau: "));
-    Serial.println(TEMPO_BASE_GRAUS);
-  }
+void limparFilaRAM() {
+  totalFilaRAM = 0;
+  Serial.println(F("OK_CLR")); // Handshake
 }
 
-// ---------------------------
-// EEPROM
-// ---------------------------
-void salvarComandoNaEEPROM(const char* cmd) {
-  if (totalComandos >= MAX_COMANDOS) {
-    Serial.println(F("Memoria cheia!"));
+void adicionarNaFilaRAM(char* cmd) {
+  if (totalFilaRAM >= MAX_FILA_RAM) {
+    Serial.println(F("ERR_FULL"));
     return;
   }
-
-  char cmdLimpo[MAX_COMANDO_LEN];
-  byte j = 0;
+  if (strlen(cmd) < 3) {
+    Serial.println(F("ERR_FMT"));
+    return;
+  }
+  strncpy(filaRAM[totalFilaRAM], cmd, MAX_COMANDO_LEN - 1);
+  filaRAM[totalFilaRAM][MAX_COMANDO_LEN - 1] = '\0';
+  totalFilaRAM++;
   
-  // Aplica o mesmo filtro usado nos comandos
-  for (byte i = 0; cmd[i] != '\0' && i < MAX_COMANDO_LEN - 1; i++) {
-    char c = cmd[i];
-    if ((c >= 'A' && c <= 'Z') || 
-        (c >= 'a' && c <= 'z') || 
-        (c >= '0' && c <= '9') || 
-        c == '(' || c == ')' || c == '-') {
-      if (c >= 'a' && c <= 'z') {
-        cmdLimpo[j++] = c - 32;
-      } else {
-        cmdLimpo[j++] = c;
-      }
-    }
-  }
-  cmdLimpo[j] = '\0';
-
-  int addr = EEPROM_END_COMANDOS + totalComandos * MAX_COMANDO_LEN;
-  byte i;
-  for (i = 0; i < MAX_COMANDO_LEN - 1 && cmdLimpo[i] != '\0'; i++) {
-    EEPROM.write(addr + i, cmdLimpo[i]);
-  }
-  EEPROM.write(addr + i, '\0');
-
-  totalComandos++;
-  EEPROM.write(EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN, totalComandos);
-
-  Serial.print(F("Salvo: "));
-  Serial.println(cmdLimpo);
+  Serial.println(F("OK_ADD")); // Handshake
 }
 
-void lerComandoDaEEPROM(int index, char* buffer) {
-  if (index < 0 || index >= totalComandos) {
-    buffer[0] = '\0';
+// Declaração antecipada
+void processarComando(const char* comando, bool fromRAM);
+
+void executarFilaRAM() {
+  if (totalFilaRAM == 0) {
+    Serial.println(F("ERR_EMPTY"));
     return;
   }
   
-  int addr = EEPROM_END_COMANDOS + index * MAX_COMANDO_LEN;
-  byte i;
-  for (i = 0; i < MAX_COMANDO_LEN; i++) {
-    buffer[i] = EEPROM.read(addr + i);
-    if (buffer[i] == '\0') break;
-  }
-  if (i == MAX_COMANDO_LEN) buffer[MAX_COMANDO_LEN - 1] = '\0';
-}
-
-void executarComandosSalvos() {
-  if (totalComandos == 0) {
-    Serial.println(F("Nenhum comando salvo!"));
-    return;
-  }
+  Serial.println(F("OK_RUN")); // Handshake - Confirma inicio
   
-  Serial.println(F("Executando..."));
-  char buffer[MAX_COMANDO_LEN];
-  
-  for (byte i = 0; i < totalComandos; i++) {
-    lerComandoDaEEPROM(i, buffer);
-    Serial.print(F("["));
-    Serial.print(i + 1);
-    Serial.print(F("]: "));
-    Serial.println(buffer);
-    delay(300);
+  for (byte i = 0; i < totalFilaRAM; i++) {
+    char cmdTemp[MAX_COMANDO_LEN];
+    strcpy(cmdTemp, filaRAM[i]);
     
-    processarComando(buffer);
-    delay(200);
-  }
-  Serial.println(F("Concluido."));
-}
-
-void limparEEPROM() {
-  for (byte i = 0; i < MAX_COMANDOS; i++) {
-    int addr = EEPROM_END_COMANDOS + i * MAX_COMANDO_LEN;
-    EEPROM.write(addr, 0);
-  }
-  totalComandos = 0;
-  EEPROM.write(EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN, 0);
-  Serial.println(F("EEPROM limpa!"));
-}
-
-void listarComandosSalvos() {
-  if (totalComandos == 0) {
-    Serial.println(F("Nenhum comando."));
-    return;
+    // Executa comando interno (flag fromRAM = true para não imprimir ACKs)
+    processarComando(cmdTemp, true); 
+    
+    delay(300); // Pausa para estabilizar entre movimentos
   }
   
-  Serial.println(F("Comandos salvos:"));
-  char buffer[MAX_COMANDO_LEN];
-  for (byte i = 0; i < totalComandos; i++) {
-    lerComandoDaEEPROM(i, buffer);
-    Serial.print(F("["));
-    Serial.print(i + 1);
-    Serial.print(F("] "));
-    Serial.println(buffer);
-  }
+  Serial.println(F("FINISH")); // Avisa fim do percurso
+  totalFilaRAM = 0; 
 }
 
 // ---------------------------
-// FILTRO PARA DABBLE
+// PROCESSAMENTO
 // ---------------------------
 void filtrarComandoDabble(char* str) {
   byte i = 0, j = 0;
-  
-  // Filtro ULTRA RESTRITO - mantém APENAS caracteres válidos para comandos
   while (str[i] != '\0' && j < MAX_COMANDO_LEN - 1) {
     char c = str[i];
-    
-    // Mantém APENAS: letras, números, parênteses e hífen (para números negativos)
-    if ((c >= 'A' && c <= 'Z') || 
-        (c >= 'a' && c <= 'z') || 
-        (c >= '0' && c <= '9') || 
-        c == '(' || c == ')' || c == '-') {
-      
-      // Converte para maiúsculas se for letra minúscula
-      if (c >= 'a' && c <= 'z') {
-        str[j++] = c - 32;
-      } else {
-        str[j++] = c;
-      }
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || 
+        (c >= '0' && c <= '9') || c == '(' || c == ')' || c == '-') {
+      if (c >= 'a' && c <= 'z') str[j++] = c - 32;
+      else str[j++] = c;
     }
-    // Se encontrar @ ou \, para completamente
-    else if (c == '@' || c == '\\') {
-      break;
-    }
-    
+    else if (c == '@' || c == '\\') break;
     i++;
   }
-  
   str[j] = '\0';
 }
 
-// ---------------------------
-// PROCESSAMENTO DE COMANDOS
-// ---------------------------
-void processarComando(const char* comando) {
-  char comandoLimpo[MAX_COMANDO_LEN];
-  char comandoFormatado[MAX_COMANDO_LEN];
+void processarComando(const char* comando, bool fromRAM) {
+  char cmdLimpo[MAX_COMANDO_LEN];
+  strncpy(cmdLimpo, comando, MAX_COMANDO_LEN - 1);
+  cmdLimpo[MAX_COMANDO_LEN - 1] = '\0';
+  filtrarComandoDabble(cmdLimpo);
   
-  // Copia o comando para buffer local
-  strncpy(comandoLimpo, comando, MAX_COMANDO_LEN - 1);
-  comandoLimpo[MAX_COMANDO_LEN - 1] = '\0';
-  
-  // Aplica filtro específico para Dabble
-  filtrarComandoDabble(comandoLimpo);
-  
-  // Verifica se está vazio após filtro
-  if (strlen(comandoLimpo) == 0) {
+  if (strlen(cmdLimpo) == 0) return;
+
+  // Comandos de Sistema (Sempre via Serial/BT)
+  if (strcmp(cmdLimpo, "LIMPARFILA") == 0) {
+    limparFilaRAM();
     return;
   }
-
-  Serial.print(F("Comando: "));
-  Serial.println(comandoLimpo);
-
-  // Tenta converter comandos sem parênteses para o formato com parênteses
-  if (comandoLimpo[0] == 'F' || comandoLimpo[0] == 'G' || 
-      comandoLimpo[0] == 'E' || comandoLimpo[0] == 'D' || 
-      comandoLimpo[0] == 'S') {
-    
-    // Se não tem parênteses, adiciona
-    if (comandoLimpo[1] != '(') {
-      int valor = atoi(comandoLimpo + 1);
-      snprintf(comandoFormatado, MAX_COMANDO_LEN, "%c(%d)", comandoLimpo[0], valor);
-      strcpy(comandoLimpo, comandoFormatado);
-      Serial.print(F("Formatado para: "));
-      Serial.println(comandoLimpo);
-    }
+  else if (strcmp(cmdLimpo, "EXECUTAR") == 0) {
+    executarFilaRAM();
+    return;
+  }
+  // Captura ADD(F(50))
+  else if (strncmp(cmdLimpo, "ADD(", 4) == 0) {
+     char subComando[MAX_COMANDO_LEN];
+     byte i = 4, j = 0;
+     while (cmdLimpo[i] != ')' && cmdLimpo[i] != '\0') {
+       subComando[j++] = cmdLimpo[i++];
+     }
+     subComando[j] = '\0';
+     adicionarNaFilaRAM(subComando);
+     return;
   }
 
-  // NOVOS COMANDOS PADRONIZADOS - sintaxe F(50), G(90), S(45)
-  if (comandoLimpo[0] == 'F' && comandoLimpo[1] == '(') {
-    int distancia = atoi(comandoLimpo + 2);
-    andarFrente(distancia);
+  // --- MOVIMENTOS FÍSICOS ---
+  if (!fromRAM) {
+    // Se receber comando direto (sem ser ADD), pode executar, 
+    // mas idealmente usamos o modo batch. 
+    Serial.println(F("CMD_DIRECT")); 
   }
-  else if (comandoLimpo[0] == 'G' && comandoLimpo[1] == '(') {
-    int angulo = atoi(comandoLimpo + 2);
-    if (angulo >= 0) {
-      curvaDireita(angulo);
-    } else {
-      curvaEsquerda(-angulo);
-    }
+
+  if (cmdLimpo[0] == 'F' && cmdLimpo[1] == '(') andarFrente(atoi(cmdLimpo + 2));
+  else if (cmdLimpo[0] == 'T' && cmdLimpo[1] == '(') andarTras(atoi(cmdLimpo + 2));
+  else if (cmdLimpo[0] == 'G' && cmdLimpo[1] == '(') {
+      int ang = atoi(cmdLimpo + 2);
+      if (ang >= 0) curvaDireita(ang); else curvaEsquerda(-ang);
   }
-  else if (comandoLimpo[0] == 'E' && comandoLimpo[1] == '(') {
-    int angulo = atoi(comandoLimpo + 2);
-    curvaEsquerda(angulo);
-  }
-  else if (comandoLimpo[0] == 'D' && comandoLimpo[1] == '(') {
-    int angulo = atoi(comandoLimpo + 2);
-    curvaDireita(angulo);
-  }
-  else if (comandoLimpo[0] == 'S' && comandoLimpo[1] == '(') {
-    int angulo = atoi(comandoLimpo + 2);
-    moverServo(angulo);
-  }
-  // COMANDO SALVAR - NOVA FUNCIONALIDADE
-  else if (comandoLimpo[0] == 'S' && comandoLimpo[1] == 'A' && comandoLimpo[2] == 'L' && 
-           comandoLimpo[3] == 'V' && comandoLimpo[4] == 'A' && comandoLimpo[5] == 'R' && 
-           comandoLimpo[6] == '(') {
-    
-    // Extrai o comando dentro dos parênteses
-    char comandoParaSalvar[MAX_COMANDO_LEN];
-    byte i = 7, j = 0;
-    
-    while (comandoLimpo[i] != ')' && comandoLimpo[i] != '\0' && j < MAX_COMANDO_LEN - 1) {
-      comandoParaSalvar[j++] = comandoLimpo[i++];
-    }
-    comandoParaSalvar[j] = '\0';
-    
-    if (strlen(comandoParaSalvar) > 0) {
-      salvarComandoNaEEPROM(comandoParaSalvar);
-    } else {
-      Serial.println(F("Erro: Comando vazio!"));
-    }
-  }
-  // COMANDOS DE SISTEMA (sem parâmetros)
-  else if (strcmp(comandoLimpo, "SERVOSCAN") == 0) {
-    iniciarServoScan();
-  }
-  else if (strcmp(comandoLimpo, "RODARSALVOS") == 0) {
-    executarComandosSalvos();
-  }
-  else if (strcmp(comandoLimpo, "LISTARSALVOS") == 0) {
-    listarComandosSalvos();
-  }
-  else if (strcmp(comandoLimpo, "LIMPARMEMORIA") == 0) {
-    limparEEPROM();
-  }
-  else if (strcmp(comandoLimpo, "PARAR") == 0) {
-    parar();
-  }
-  else if (strcmp(comandoLimpo, "AJUDA") == 0) {
-    Serial.println(F("=== COMANDOS PADRONIZADOS ==="));
-    Serial.println(F("F(50)\\     - Anda 50cm"));
-    Serial.println(F("G(90)\\     - Gira 90° direita"));
-    Serial.println(F("G(-90)\\    - Gira 90° esquerda"));
-    Serial.println(F("E(90)\\     - Esquerda 90°"));
-    Serial.println(F("D(90)\\     - Direita 90°"));
-    Serial.println(F("S(45)\\     - Servo 45°"));
-    Serial.println(F("SALVAR(F(50))\\ - Salva comando"));
-    Serial.println(F("SERVOSCAN\\       - Varredura servo"));
-    Serial.println(F("RODARSALVOS\\     - Executa sequencia"));
-    Serial.println(F("LISTARSALVOS\\    - Lista salvos"));
-    Serial.println(F("LIMPARMEMORIA\\   - Limpa memoria"));
-    Serial.println(F("PARAR\\           - Para motores"));
-    Serial.println(F("AJUDA\\           - Mostra ajuda"));
-  }
-  else {
-    Serial.print(F("Comando desconhecido: "));
-    Serial.println(comandoLimpo);
-  }
+  else if (cmdLimpo[0] == 'E' && cmdLimpo[1] == '(') curvaEsquerda(atoi(cmdLimpo + 2));
+  else if (cmdLimpo[0] == 'D' && cmdLimpo[1] == '(') curvaDireita(atoi(cmdLimpo + 2));
+  else if (cmdLimpo[0] == 'S' && cmdLimpo[1] == '(') moverServo(atoi(cmdLimpo + 2));
+  else if (strcmp(cmdLimpo, "PARAR") == 0) parar();
 }
 
 // ---------------------------
-// SETUP
+// SETUP & LOOP
 // ---------------------------
 void setup() {
   Serial.begin(9600);
@@ -461,51 +321,33 @@ void setup() {
   pinMode(MOTOR_ESQ_TRAS, OUTPUT);
   pinMode(MOTOR_DIR_FRENTE, OUTPUT);
   pinMode(MOTOR_DIR_TRAS, OUTPUT);
+  pinMode(pinoEncoderEsq, INPUT_PULLUP);
+  pinMode(pinoEncoderDir, INPUT_PULLUP);
+
+  attachInterrupt(digitalPinToInterrupt(pinoEncoderEsq), contarEsq, FALLING);
+  attachInterrupt(digitalPinToInterrupt(pinoEncoderDir), contarDir, FALLING);
 
   meuServo.attach(SERVO_PIN);
   meuServo.write(0);
-
-  totalComandos = EEPROM.read(EEPROM_END_COMANDOS + MAX_COMANDOS * MAX_COMANDO_LEN);
-  if (totalComandos > MAX_COMANDOS) totalComandos = 0;
-
-  Serial.println(F("=== CARRINHO DABBLE ==="));
-  Serial.println(F("Comandos: F(dist), G(ang), S(ang)"));
-  Serial.println(F("Use '\\' como terminador"));
-  Serial.println(F("Digite AJUDA\\ para ver comandos"));
+  
+  Serial.println(F("EGG0-1 ONLINE"));
 }
 
-// ---------------------------
-// LOOP PRINCIPAL
-// ---------------------------
 void loop() {
   if (meuBT.available()) {
     char buffer[MAX_COMANDO_LEN];
     byte index = 0;
     unsigned long inicio = millis();
-    bool comandoCompleto = false;
+    bool fim = false;
     
-    // Lê até encontrar '\' (nosso terminador)
-    while (meuBT.available() && index < MAX_COMANDO_LEN - 1 && !comandoCompleto) {
+    while (meuBT.available() && index < MAX_COMANDO_LEN - 1 && !fim) {
       char c = meuBT.read();
-      
-      if (c == '\\') {
-        comandoCompleto = true;
-        break;
-      }
-      
-      buffer[index++] = c;
-      
-      if (millis() - inicio > 200) break;
+      if (c == '\\') fim = true;
+      else buffer[index++] = c;
+      if (millis() - inicio > 100) break; 
     }
     buffer[index] = '\0';
-    
-    if (index > 0) {
-      processarComando(buffer);
-    }
+    if (index > 0) processarComando(buffer, false);
   }
-  
-  // Atualiza servo scan
   atualizarServoScan();
-  
-  delay(10);
 }
