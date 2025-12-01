@@ -1,363 +1,315 @@
 # =================================================================
-# == INTERFACE GRÁFICA PARA CONTROLE E VISUALIZAÇÃO DO CARRINHO  ==
-# ==               COM PERSISTÊNCIA EM BANCO DE DADOS            ==
+# == EGG0-1 - CONTROLE, VISUALIZAÇÃO E HISTÓRICO (SUPABASE)     ==
 # =================================================================
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import math
 import serial
 import serial.tools.list_ports
 import threading
 import time
-import sqlite3
 from datetime import datetime
+from supabase import create_client, Client
+
+# --- CONFIGURAÇÃO DO SUPABASE ---
+# !!! SUBSTITUA PELAS SUAS CHAVES DO PAINEL DO SUPABASE !!!
+SUPABASE_URL = "https://xdigdkwgnqxsnarvpqxu.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhkaWdka3dnbnF4c25hcnZwcXh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ1NzAzMTQsImV4cCI6MjA4MDE0NjMxNH0.DdLkpy5oQaWEPGQJeu4Dxg6Hzd3oHlv9hXhIBqureo8"
+
+supabase: Client = None
 
 # --- Constantes da GUI ---
-CANVAS_WIDTH = 600
+CANVAS_WIDTH = 600 
 CANVAS_HEIGHT = 600
-SCALE = 10  # 10 pixels = 1 cm
-ROBOT_RADIUS = 1.5 * SCALE 
+SCALE = 0.7
+ROBOT_RADIUS = 10 * SCALE 
 
 # --- Variáveis Globais ---
 ser = None
-robot_x, robot_y, robot_theta = 0, 0, 0 # X(cm), Y(cm), Theta(graus)
+robot_x, robot_y, robot_theta = 0, 0, 0 
 path_points = []
+cache_rotas_historico = [] # Armazena os dados crus vindos do banco para consulta
 
 # =================================================================
-# FUNÇÕES DE BANCO DE DADOS (SQLite)
+# FUNÇÕES DE BANCO DE DADOS
 # =================================================================
 def init_db():
-    """Cria o banco de dados e as tabelas se não existirem"""
+    global supabase
     try:
-        conn = sqlite3.connect('rotas_carrinho.db')
-        cursor = conn.cursor()
-        
-        # Tabela para guardar o cabeçalho da rota
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS rotas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT NOT NULL,
-                data_criacao TEXT
-            )
-        ''')
-        
-        # Tabela para guardar os comandos
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS comandos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rota_id INTEGER,
-                ordem INTEGER,
-                comando TEXT,
-                valor REAL,
-                FOREIGN KEY (rota_id) REFERENCES rotas (id)
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        print("Banco de dados inicializado com sucesso.")
+        if "SUA_URL" in SUPABASE_URL:
+            print("AVISO: Configure o Supabase no código!")
+            return
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("Supabase conectado.")
     except Exception as e:
-        print(f"Erro ao iniciar banco de dados: {e}")
+        print(f"Erro Supabase: {e}")
 
 def salvar_rota_db():
-    """Salva a lista atual de comandos no banco de dados"""
-    nome_rota = nome_rota_entry.get()
-    comandos = command_listbox.get(0, tk.END)
+    nome = nome_rota_entry.get()
+    cmds = command_listbox.get(0, tk.END)
     
-    if not nome_rota:
-        status_label.config(text="Erro: Digite um nome para a rota!")
+    if not nome or not cmds:
+        status_label.config(text="Erro: Nome ou comandos vazios")
         return
     
-    if not comandos:
-        status_label.config(text="Erro: Lista de comandos vazia!")
-        return
+    status_label.config(text="Salvando...")
+    
+    def _thread_save():
+        try:
+            # 1. Cria Rota
+            res = supabase.table("rotas").insert({
+                "nome": nome, 
+                "data_criacao": datetime.now().isoformat()
+            }).execute()
+            new_id = res.data[0]['id']
+            
+            # 2. Cria Comandos
+            payload = []
+            for i, c in enumerate(cmds):
+                p = c.split()
+                val = float(p[1]) if len(p)>1 else 0.0
+                payload.append({"rota_id": new_id, "ordem": i, "comando": p[0], "valor": val})
+            
+            supabase.table("comandos").insert(payload).execute()
+            
+            root.after(0, lambda: status_label.config(text="Salvo com sucesso!"))
+            root.after(0, atualizar_historico) # Atualiza a lista na outra aba
+        except Exception as e:
+            root.after(0, lambda: status_label.config(text=f"Erro: {str(e)[:30]}"))
 
-    try:
-        conn = sqlite3.connect('rotas_carrinho.db')
-        cursor = conn.cursor()
-        
-        # 1. Salvar a Rota
-        data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("INSERT INTO rotas (nome, data_criacao) VALUES (?, ?)", (nome_rota, data_atual))
-        rota_id = cursor.lastrowid # Pega o ID gerado
-        
-        # 2. Salvar os Comandos
-        for i, cmd in enumerate(comandos):
-            parts = cmd.split()
-            acao = parts[0]
-            val = float(parts[1]) if len(parts) > 1 else 0.0
+    threading.Thread(target=_thread_save, daemon=True).start()
+
+def atualizar_historico():
+    """Baixa a lista de rotas do Supabase e preenche a Listbox do Histórico"""
+    history_status.config(text="Atualizando lista...")
+    
+    def _thread_list():
+        global cache_rotas_historico
+        try:
+            # Pega as ultimas 50 rotas
+            res = supabase.table("rotas").select("*").order("data_criacao", desc=True).limit(50).execute()
+            cache_rotas_historico = res.data
             
-            cursor.execute("INSERT INTO comandos (rota_id, ordem, comando, valor) VALUES (?, ?, ?, ?)", 
-                           (rota_id, i, acao, val))
+            def _update_ui_list():
+                history_listbox.delete(0, tk.END)
+                for r in cache_rotas_historico:
+                    # Formata a data para ficar bonita (DD/MM HH:MM)
+                    data_raw = r['data_criacao'].split('.')[0].replace('T', ' ')
+                    history_listbox.insert(tk.END, f"{r['nome']}  |  {data_raw}")
+                history_status.config(text="Lista atualizada.")
             
-        conn.commit()
-        conn.close()
-        
-        status_label.config(text=f"Sucesso: Rota '{nome_rota}' salva!")
-        nome_rota_entry.delete(0, tk.END) # Limpa o campo após salvar
-        
-    except Exception as e:
-        status_label.config(text=f"Erro ao salvar no BD: {e}")
+            root.after(0, _update_ui_list)
+        except Exception as e:
+            root.after(0, lambda: history_status.config(text=f"Erro: {e}"))
+
+    threading.Thread(target=_thread_list, daemon=True).start()
+
+def carregar_rota_selecionada():
+    """Pega a rota clicada na aba Histórico e joga na aba Controle"""
+    selection = history_listbox.curselection()
+    if not selection:
+        return
+    
+    index = selection[0]
+    rota_dados = cache_rotas_historico[index]
+    rota_id = rota_dados['id']
+    
+    history_status.config(text=f"Carregando ID {rota_id}...")
+    
+    def _thread_load():
+        try:
+            # Busca comandos daquela rota
+            res = supabase.table("comandos").select("*").eq("rota_id", rota_id).order("ordem").execute()
+            cmds_db = res.data
+            
+            def _aplicar_na_tela():
+                # 1. Limpa tudo atual
+                reset_path()
+                clear_commands()
+                nome_rota_entry.delete(0, tk.END)
+                nome_rota_entry.insert(0, rota_dados['nome'])
+                
+                # 2. Preenche a lista e desenha o mapa
+                for item in cmds_db:
+                    cmd_str = item['comando']
+                    if item['comando'] != "ENTREGAR":
+                        cmd_str += f" {item['valor']}"
+                    
+                    command_listbox.insert(tk.END, cmd_str)
+                    simular_movimento(cmd_str) # Desenha no canvas
+                    update_gui() # Atualiza visual
+                
+                # 3. Muda para a aba de controle automaticamente
+                tabs.select(tab_controle)
+                history_status.config(text="Rota carregada!")
+                status_label.config(text=f"Rota '{rota_dados['nome']}' carregada.")
+
+            root.after(0, _aplicar_na_tela)
+            
+        except Exception as e:
+             root.after(0, lambda: history_status.config(text=f"Erro load: {e}"))
+
+    threading.Thread(target=_thread_load, daemon=True).start()
 
 # =================================================================
-# FUNÇÕES DE LÓGICA E SIMULAÇÃO
+# FUNÇÕES LÓGICA / SERIAL / VISUAL
 # =================================================================
 def simular_movimento(cmd_str):
-    """Calcula a nova posição do robô virtual baseado no comando enviado"""
     global robot_x, robot_y, robot_theta
-    
     parts = cmd_str.split()
     tipo = parts[0].upper()
-    
-    valor = 0
-    if len(parts) > 1:
-        try:
-            valor = float(parts[1])
-        except ValueError:
-            valor = 0
-
+    val = float(parts[1]) if len(parts) > 1 else 0
     rad = math.radians(robot_theta)
-
-    if tipo == "FRENTE":
-        robot_x += valor * math.cos(rad)
-        robot_y += valor * math.sin(rad)
-    elif tipo == "TRAS":
-        robot_x -= valor * math.cos(rad)
-        robot_y -= valor * math.sin(rad)
-    elif tipo == "ESQUERDA":
-        robot_theta += valor
-    elif tipo == "DIREITA":
-        robot_theta -= valor
     
-    robot_theta = robot_theta % 360
+    if tipo == "FRENTE":
+        robot_x += val * math.cos(rad); robot_y += val * math.sin(rad)
+    elif tipo == "TRAS":
+        robot_x -= val * math.cos(rad); robot_y -= val * math.sin(rad)
+    elif tipo == "ESQUERDA": robot_theta += val
+    elif tipo == "DIREITA": robot_theta -= val
+    robot_theta %= 360
 
-# =================================================================
-# FUNÇÕES DE COMUNICAÇÃO SERIAL
-# =================================================================
+def update_gui():
+    cx = (CANVAS_WIDTH/2) + (robot_x * SCALE)
+    cy = (CANVAS_HEIGHT/2) - (robot_y * SCALE)
+    if not path_points or (path_points[-1] != (cx, cy)): path_points.append((cx, cy))
+    
+    canvas.delete("all")
+    canvas.create_line(CANVAS_WIDTH/2, 0, CANVAS_WIDTH/2, CANVAS_HEIGHT, fill="#eee")
+    canvas.create_line(0, CANVAS_HEIGHT/2, CANVAS_WIDTH, CANVAS_HEIGHT/2, fill="#eee")
+    if len(path_points) > 1: canvas.create_line(path_points, fill="blue", width=2)
+    
+    canvas.create_oval(cx-ROBOT_RADIUS, cy-ROBOT_RADIUS, cx+ROBOT_RADIUS, cy+ROBOT_RADIUS, fill="red")
+    ex = cx + ROBOT_RADIUS*1.5 * math.cos(math.radians(robot_theta))
+    ey = cy - ROBOT_RADIUS*1.5 * math.sin(math.radians(robot_theta))
+    canvas.create_line(cx, cy, ex, ey, fill="black", width=2)
+
 def connect_serial():
     global ser
-    port = port_combobox.get()
-    if not port:
-        status_label.config(text="Erro: Nenhuma porta selecionada")
-        return
     try:
-        # ATENÇÃO: Baud rate 9600 para Arduino padrão
-        ser = serial.Serial(port, 9600, timeout=1)
-        time.sleep(2) # Espera o Arduino reiniciar
-        status_label.config(text=f"Conectado a {port}")
-        connect_button.config(state="disabled")
-        disconnect_button.config(state="normal")
-        
-        # Inicia thread de leitura
-        threading.Thread(target=read_from_serial, daemon=True).start()
-    except serial.SerialException as e:
-        status_label.config(text=f"Erro ao conectar: {e}")
+        ser = serial.Serial(port_combobox.get(), 9600, timeout=1)
+        time.sleep(2)
+        status_label.config(text="Conectado!")
+        threading.Thread(target=read_serial, daemon=True).start()
+    except Exception as e: status_label.config(text=str(e))
 
-def disconnect_serial():
-    global ser
-    if ser and ser.is_open:
-        ser.close()
-        status_label.config(text="Desconectado")
-        connect_button.config(state="normal")
-        disconnect_button.config(state="disabled")
-
-def read_from_serial():
-    """Lê o retorno do Arduino apenas para mostrar no terminal/debug"""
+def read_serial():
     while ser and ser.is_open:
-        try:
-            line = ser.readline().decode('utf-8').strip()
-            if line:
-                print(f"[Arduino]: {line}")
-        except:
-            pass
-
-# =================================================================
-# FUNÇÕES DA GUI
-# =================================================================
-def update_gui():
-    canvas_x = (CANVAS_WIDTH / 2) + (robot_x * SCALE)
-    canvas_y = (CANVAS_HEIGHT / 2) - (robot_y * SCALE) 
-
-    if len(path_points) == 0 or (path_points[-1][0] != canvas_x or path_points[-1][1] != canvas_y):
-       path_points.append((canvas_x, canvas_y))
-
-    canvas.delete("all")
-    
-    # Grade
-    canvas.create_line(CANVAS_WIDTH/2, 0, CANVAS_WIDTH/2, CANVAS_HEIGHT, fill="#ddd")
-    canvas.create_line(0, CANVAS_HEIGHT/2, CANVAS_WIDTH, CANVAS_HEIGHT/2, fill="#ddd")
-
-    # Caminho
-    if len(path_points) > 1:
-        canvas.create_line(path_points, fill="blue", width=2)
-    
-    # Robô
-    canvas.create_oval(canvas_x - ROBOT_RADIUS, canvas_y - ROBOT_RADIUS,
-                       canvas_x + ROBOT_RADIUS, canvas_y + ROBOT_RADIUS,
-                       fill="red", outline="black")
-    
-    # Orientação
-    end_x = canvas_x + ROBOT_RADIUS * 1.5 * math.cos(math.radians(robot_theta))
-    end_y = canvas_y - ROBOT_RADIUS * 1.5 * math.sin(math.radians(robot_theta))
-    canvas.create_line(canvas_x, canvas_y, end_x, end_y, fill="black", width=3)
-
-def add_command():
-    cmd_type = cmd_type_var.get()
-    value = cmd_value_entry.get()
-    
-    if (value.replace('.','',1).isdigit()) or cmd_type == "ENTREGAR":
-        if cmd_type == "ENTREGAR":
-            command = "ENTREGAR"
-        else:
-            command = f"{cmd_type} {value}"
-        command_listbox.insert(tk.END, command)
-    else:
-        status_label.config(text="Erro: valor inválido")
-
-def clear_commands():
-    command_listbox.delete(0, tk.END)
+        try: 
+            l = ser.readline().decode().strip()
+            if l: print(f"Arduino: {l}")
+        except: pass
 
 def send_commands():
-    if not ser or not ser.is_open:
-        status_label.config(text="Erro: Não conectado!")
-        return
-    
-    commands = command_listbox.get(0, tk.END)
-    status_label.config(text="Executando fila...")
-    
-    def run_queue():
-        for cmd in commands:
-            # --- TRADUÇÃO DE PROTOCOLO (Python -> Arduino) ---
-            parts = cmd.split()
-            acao = parts[0]
-            val = parts[1] if len(parts) > 1 else "0"
-            
-            cmd_arduino = ""
-            tempo_espera = 1.0 
-
-            if acao == "FRENTE":
-                cmd_arduino = f"F({val})\\"
-                tempo_espera = (float(val) * 0.05) + 0.5 
-            elif acao == "TRAS":
-                cmd_arduino = f"T({val})\\"
-                tempo_espera = (float(val) * 0.05) + 0.5
-            elif acao == "DIREITA":
-                cmd_arduino = f"D({val})\\"
-                tempo_espera = 1.0
-            elif acao == "ESQUERDA":
-                cmd_arduino = f"E({val})\\"
-                tempo_espera = 1.0
-            elif acao == "ENTREGAR":
-                cmd_arduino = "S(90)\\" 
-                tempo_espera = 1.5
-
-            # 1. Envia para o Arduino Real
-            if cmd_arduino:
-                print(f"Enviando Serial: {cmd_arduino}")
-                ser.write(cmd_arduino.encode('utf-8'))
-            
-            # 2. Simula na Interface Virtual
-            simular_movimento(cmd)
-            
-            # 3. Atualiza a tela (thread-safe para Tkinter)
+    cmds = command_listbox.get(0, tk.END)
+    def _run():
+        for c in cmds:
+            simular_movimento(c)
             root.after(0, update_gui)
-            
-            # 4. Pausa para o robô físico ter tempo de executar
-            time.sleep(tempo_espera) 
-            
-        status_label.config(text=f"Concluído: {len(commands)} comandos")
+            # Envio serial simplificado para o exemplo
+            if ser and ser.is_open: 
+                p = c.split()
+                # Conversão simples ex: FRENTE 10 -> F(10)\
+                code = p[0][0] + (f"({p[1]})" if len(p)>1 else "(0)") + "\\" 
+                ser.write(code.encode())
+            time.sleep(0.5) 
+    threading.Thread(target=_run, daemon=True).start()
 
-    threading.Thread(target=run_queue, daemon=True).start()
+def add_cmd():
+    v = cmd_val.get()
+    t = cmd_type.get()
+    command_listbox.insert(tk.END, f"{t} {v}" if t != "ENTREGAR" else t)
 
-def reset_path():
+def clear_commands(): command_listbox.delete(0, tk.END)
+def reset_path(): 
     global path_points, robot_x, robot_y, robot_theta
-    path_points = []
-    robot_x, robot_y, robot_theta = 0, 0, 0
+    path_points.clear(); robot_x=0; robot_y=0; robot_theta=0
     update_gui()
 
 # =================================================================
-# SETUP DA JANELA PRINCIPAL
+# INTERFACE GRÁFICA (SETUP)
 # =================================================================
-# Inicializa o Banco de Dados antes de abrir a janela
 init_db()
-
 root = tk.Tk()
-root.title("OncoMap / Carrinho Control (Com Banco de Dados)")
+root.title("EGG0-1 Control")
 
-main_frame = ttk.Frame(root, padding="10")
-main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+# Layout Principal: Esquerda (Mapa) | Direita (Abas)
+main_frame = ttk.Frame(root, padding=5)
+main_frame.grid(row=0, column=0, sticky="nsew")
 
-# --- Canvas (Esquerda) ---
-canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken", borderwidth=1)
-canvas.grid(row=0, column=0, rowspan=10, padx=5, pady=5)
+# --- LADO ESQUERDO: MAPA ---
+canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken")
+canvas.grid(row=0, column=0, rowspan=2, padx=5, pady=5)
 
-# --- Controles de Conexão (Direita Topo) ---
-controls_frame = ttk.LabelFrame(main_frame, text="Conexão", padding="10")
-controls_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N), padx=5, pady=5)
+# --- LADO DIREITO: SISTEMA DE ABAS ---
+right_panel = ttk.Frame(main_frame)
+right_panel.grid(row=0, column=1, sticky="ns")
 
-port_label = ttk.Label(controls_frame, text="Porta Serial:")
-port_label.grid(row=0, column=0, sticky=tk.W)
-try:
-    ports = [port.device for port in serial.tools.list_ports.comports()]
-except:
-    ports = []
-port_combobox = ttk.Combobox(controls_frame, values=ports)
-port_combobox.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E))
+tabs = ttk.Notebook(right_panel)
+tabs.grid(row=0, column=0, sticky="nsew")
+
+# === ABA 1: CONTROLE (O que já existia) ===
+tab_controle = ttk.Frame(tabs, padding=10)
+tabs.add(tab_controle, text="Controle & Criação")
+
+# Conexão
+lf_conn = ttk.LabelFrame(tab_controle, text="Conexão")
+lf_conn.pack(fill="x", pady=5)
+try: ports = [p.device for p in serial.tools.list_ports.comports()]
+except: ports = []
+port_combobox = ttk.Combobox(lf_conn, values=ports); 
 if ports: port_combobox.current(0)
+port_combobox.pack(fill="x", padx=5, pady=2)
+ttk.Button(lf_conn, text="Conectar", command=connect_serial).pack(fill="x", padx=5)
+status_label = ttk.Label(lf_conn, text="Offline", foreground="blue")
+status_label.pack(anchor="w", padx=5)
 
-connect_button = ttk.Button(controls_frame, text="Conectar", command=connect_serial)
-connect_button.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
-disconnect_button = ttk.Button(controls_frame, text="Desconectar", command=disconnect_serial, state="disabled")
-disconnect_button.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5)
-status_label = ttk.Label(controls_frame, text="Desconectado", relief="sunken", anchor=tk.W)
-status_label.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+# Comandos
+lf_cmds = ttk.LabelFrame(tab_controle, text="Adicionar Comandos")
+lf_cmds.pack(fill="x", pady=5)
+cmd_type = tk.StringVar(value="FRENTE")
+ttk.OptionMenu(lf_cmds, cmd_type, "FRENTE", "FRENTE", "TRAS", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x")
+cmd_val = ttk.Entry(lf_cmds); cmd_val.insert(0, "10"); cmd_val.pack(fill="x", pady=2)
+ttk.Button(lf_cmds, text="Adicionar", command=add_cmd).pack(fill="x")
 
-# --- Criação de Comandos (Direita Meio) ---
-cmd_frame = ttk.LabelFrame(main_frame, text="Criar Rota", padding="10")
-cmd_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N), padx=5, pady=5)
+# Fila
+lf_queue = ttk.LabelFrame(tab_controle, text="Fila Atual")
+lf_queue.pack(fill="both", expand=True, pady=5)
+command_listbox = tk.Listbox(lf_queue, height=8)
+command_listbox.pack(fill="both", expand=True, padx=5, pady=2)
+ttk.Button(lf_queue, text="Limpar", command=clear_commands).pack(side="left", padx=2)
+ttk.Button(lf_queue, text="Executar", command=send_commands).pack(side="right", padx=2)
 
-cmd_type_var = tk.StringVar(value="FRENTE")
-cmd_types = ["FRENTE", "TRAS", "ESQUERDA", "DIREITA", "ENTREGAR"]
-cmd_type_menu = ttk.OptionMenu(cmd_frame, cmd_type_var, cmd_types[0], *cmd_types)
-cmd_type_menu.grid(row=0, column=0, sticky=(tk.W, tk.E))
+# Salvar
+lf_save = ttk.LabelFrame(tab_controle, text="Salvar Rota")
+lf_save.pack(fill="x", pady=5)
+ttk.Label(lf_save, text="Nome:").pack(anchor="w")
+nome_rota_entry = ttk.Entry(lf_save)
+nome_rota_entry.pack(fill="x", padx=5)
+ttk.Button(lf_save, text="Salvar na Nuvem", command=salvar_rota_db).pack(fill="x", padx=5, pady=5)
+ttk.Button(lf_save, text="Resetar Mapa", command=reset_path).pack(fill="x", padx=5)
 
-cmd_value_entry = ttk.Entry(cmd_frame, width=10)
-cmd_value_entry.grid(row=0, column=1, padx=5)
-cmd_value_entry.insert(0, "10") 
 
-add_cmd_button = ttk.Button(cmd_frame, text="Adicionar", command=add_command)
-add_cmd_button.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+# === ABA 2: HISTÓRICO (NOVIDADE) ===
+tab_historico = ttk.Frame(tabs, padding=10)
+tabs.add(tab_historico, text="Histórico (DB)")
 
-# --- Fila e Banco de Dados (Direita Baixo) ---
-queue_frame = ttk.LabelFrame(main_frame, text="Fila e Banco de Dados", padding="10")
-queue_frame.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+ttk.Label(tab_historico, text="Rotas Salvas no Supabase:").pack(anchor="w")
 
-command_listbox = tk.Listbox(queue_frame, height=10)
-command_listbox.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
+# Lista de Histórico
+history_listbox = tk.Listbox(tab_historico, height=20)
+history_listbox.pack(fill="both", expand=True, pady=5)
 
-# Botões de Controle da Fila
-send_button = ttk.Button(queue_frame, text="ENVIAR E RODAR", command=send_commands)
-send_button.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=2)
-clear_button = ttk.Button(queue_frame, text="Limpar Lista", command=clear_commands)
-clear_button.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=2)
+# Botões do Histórico
+btn_frame_hist = ttk.Frame(tab_historico)
+btn_frame_hist.pack(fill="x")
 
-# Separador Visual
-ttk.Separator(queue_frame, orient='horizontal').grid(row=2, column=0, columnspan=2, sticky='ew', pady=5)
+ttk.Button(btn_frame_hist, text="Atualizar Lista", command=atualizar_historico).pack(fill="x", pady=2)
+ttk.Button(btn_frame_hist, text="CARREGAR ROTA SELECIONADA", command=carregar_rota_selecionada).pack(fill="x", pady=5)
 
-# Controles do Banco de Dados
-ttk.Label(queue_frame, text="Nome da Rota:").grid(row=3, column=0, sticky=tk.W)
-nome_rota_entry = ttk.Entry(queue_frame)
-nome_rota_entry.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=2)
+history_status = ttk.Label(tab_historico, text="...", font=("Arial", 8))
+history_status.pack(anchor="w")
 
-save_db_button = ttk.Button(queue_frame, text="Salvar no Histórico", command=salvar_rota_db)
-save_db_button.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-
-reset_path_button = ttk.Button(queue_frame, text="Resetar Mapa (Tela)", command=reset_path)
-reset_path_button.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E))
-
-# --- Inicialização ---
+# Inicializa visual
 update_gui()
 root.mainloop()
-
-# Fecha serial ao sair se estiver aberta
-if ser and ser.is_open:
-    ser.close()
