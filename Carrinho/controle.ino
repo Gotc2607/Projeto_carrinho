@@ -3,7 +3,6 @@
 #include <Servo.h>
 #include <SoftwareSerial.h>
 
-// RX pino 10, TX pino 11
 SoftwareSerial meuBT(10, 11);
 
 // --- HARDWARE ---
@@ -18,11 +17,8 @@ SoftwareSerial meuBT(10, 11);
 
 const float diametroRoda_cm = 6.3;
 const float pi = 3.1415;
-float distanciaEsq = 0;
-float distanciaDir = 0;
-
-volatile unsigned long pulsosEsq = 0;
-volatile unsigned long pulsosDir = 0;
+float distanciaEsq = 0, distanciaDir = 0;
+volatile unsigned long pulsosEsq = 0, pulsosDir = 0;
 
 // --- FILA RAM ---
 #define MAX_FILA_RAM 30
@@ -32,30 +28,21 @@ byte totalFilaRAM = 0;
 
 Servo meuServo;
 byte posicaoServo = 0;
-bool servoScanning = false;
-unsigned long lastServoMove = 0;
-byte servoScanAngle = 0;
-bool servoScanDirection = true;
 
-// --- FUNÇÃO AUXILIAR DE RESPOSTA ---
-void responder(String msg) {
-  Serial.println(msg); 
-  meuBT.println(msg);  
-}
+// --- RESPOSTA ---
+void responder(String msg) { Serial.println(msg); meuBT.println(msg); }
 
 // --- ENCODERS ---
 void contarEsq() { pulsosEsq++; }
 void contarDir() { pulsosDir++; }
-
 void posicao() {
     noInterrupts();
-    unsigned long pe = pulsosEsq;
-    unsigned long pd = pulsosDir;
+    unsigned long pe = pulsosEsq; unsigned long pd = pulsosDir;
     pulsosEsq = 0; pulsosDir = 0;
     interrupts();
-    float perimetro = diametroRoda_cm * pi;
-    distanciaEsq = (float)(pe / (float)furosDoDisco) * perimetro;
-    distanciaDir = (float)(pd / (float)furosDoDisco) * perimetro;
+    float perim = diametroRoda_cm * pi;
+    distanciaEsq = (float)(pe / (float)furosDoDisco) * perim;
+    distanciaDir = (float)(pd / (float)furosDoDisco) * perim;
 }
 
 void parar() {
@@ -63,161 +50,107 @@ void parar() {
   digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, LOW);
 }
 
-// --- MOVIMENTO COM TIMEOUT (SEGURANÇA) ---
+// --- MOVIMENTOS ---
 bool wait_movement(float distMetaEsq, float distMetaDir, unsigned long timeoutMs) {
     unsigned long inicio = millis();
     float acEsq = 0, acDir = 0;
-    posicao(); // Zera contadores locais
-    
+    posicao(); 
     while(true) {
-        // 1. Verifica Tempo
-        if (millis() - inicio > timeoutMs) {
-            parar();
-            responder("ERR_TIMEOUT");
-            return false; // Falha
-        }
-        
-        // 2. Verifica Conclusão
+        if (millis() - inicio > timeoutMs) { parar(); responder("ERR_TIMEOUT"); return false; }
         bool esqOk = (distMetaEsq <= 0) || (acEsq >= distMetaEsq);
         bool dirOk = (distMetaDir <= 0) || (acDir >= distMetaDir);
+        if (esqOk && dirOk) break;
         
-        if (esqOk && dirOk) break; // Sucesso
+        if (!esqOk) { digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW); }
+        else { digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, LOW); }
         
-        // 3. Motores
-        if (!esqOk) {
-             digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW);
-        } else {
-             digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, LOW);
-        }
-        
-        if (!dirOk) {
-             digitalWrite(MOTOR_DIR_FRENTE, HIGH); digitalWrite(MOTOR_DIR_TRAS, LOW);
-        } else {
-             digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, LOW);
-        }
+        if (!dirOk) { digitalWrite(MOTOR_DIR_FRENTE, HIGH); digitalWrite(MOTOR_DIR_TRAS, LOW); }
+        else { digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, LOW); }
 
-        // 4. Atualiza Posição
-        posicao();
-        acEsq += distanciaEsq;
-        acDir += distanciaDir;
+        posicao(); acEsq += distanciaEsq; acDir += distanciaDir;
         delay(10);
     }
-    parar();
-    return true;
+    parar(); return true;
 }
 
-// --- IMPLEMENTAÇÃO LÓGICA DE MOVIMENTO ---
-// Nota: Usamos wait_movement para gerenciar o loop e o tempo
-void andarFrente(int distancia) {
-  if (distancia <= 0) return;
-  if (distancia > 200) distancia = 200;
-  // Timeout dinâmico: Mínimo 3s + 100ms por cm. Ex: 50cm = 8s
-  unsigned long t = 3000 + (distancia * 100); 
-  wait_movement(distancia, distancia, t);
+void andarFrente(int dist) {
+  if (dist <= 0) return;
+  if (dist > 200) dist = 200;
+  wait_movement(dist, dist, 3000 + (dist * 100));
 }
 
-void andarTras(int distancia) {
-  // Simplificado para trás (sem timeout complexo por enquanto, ou copie a logica acima invertendo pinos)
-  if (distancia <= 0) return;
+void andarTras(int dist) {
+  if (dist <= 0) return;
   float da = 0; posicao();
-  while(da < distancia){
+  while(da < dist){
     digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, HIGH);
     digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, HIGH);
-    posicao(); da += distanciaEsq;
-    delay(10);
+    posicao(); da += distanciaEsq; delay(10);
   }
   parar();
 }
 
 void curvaEsquerda(int graus) {
   if (graus <= 0) return;
-  // Calculo arco: graus * largura / conversao
-  float distAlvo = graus * (20.5 * 0.0174533); 
-  
-  // Loop manual aqui para garantir pinagem de giro (Esq Para, Dir Frente)
-  unsigned long inicio = millis();
-  float acDir = 0;
-  posicao();
-  
-  while(acDir < distAlvo){
-    if (millis() - inicio > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
-    
+  float alvo = graus * (20.5 * 0.0174533); 
+  unsigned long ini = millis(); float ac = 0; posicao();
+  while(ac < alvo){
+    if (millis() - ini > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
     digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, LOW);
     digitalWrite(MOTOR_DIR_FRENTE, HIGH); digitalWrite(MOTOR_DIR_TRAS, LOW);
-    posicao(); 
-    acDir += distanciaDir;
-    delay(10);
+    posicao(); ac += distanciaDir; delay(10);
   }
   parar();
 }
 
 void curvaDireita(int graus) {
   if (graus <= 0) return;
-  float distAlvo = graus * (20.5 * 0.0174533); 
-  
-  unsigned long inicio = millis();
-  float acEsq = 0;
-  posicao();
-  
-  while(acEsq < distAlvo){
-    if (millis() - inicio > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
-    
+  float alvo = graus * (20.5 * 0.0174533); 
+  unsigned long ini = millis(); float ac = 0; posicao();
+  while(ac < alvo){
+    if (millis() - ini > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
     digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW);
     digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, LOW);
-    posicao(); 
-    acEsq += distanciaEsq;
-    delay(10);
+    posicao(); ac += distanciaEsq; delay(10);
   }
   parar();
 }
 
-void moverServo(int angulo) {
-  if (angulo < 0) angulo = 0; if (angulo > 180) angulo = 180;
-  meuServo.write(angulo); posicaoServo = angulo;
-  delay(500); // Espera servo chegar
+// --- FUNÇÃO DO OVO (SERVO) ---
+void depositarOvo() {
+  // Movimento de "Varredura" para soltar o ovo
+  meuServo.write(90); // Abre/Empurra
+  delay(1000);        // Espera cair
+  meuServo.write(0);  // Retorna/Fecha
+  delay(500);
 }
 
 // --- GERENCIAMENTO FILA ---
-void limparFilaRAM() {
-  totalFilaRAM = 0;
-  responder("OK_CLR"); 
-}
+void limparFilaRAM() { totalFilaRAM = 0; responder("OK_CLR"); }
 
 void adicionarNaFilaRAM(char* cmd) {
   if (totalFilaRAM >= MAX_FILA_RAM) { responder("ERR_FULL"); return; }
-  if (strlen(cmd) < 3) { responder("ERR_FMT"); return; }
   strncpy(filaRAM[totalFilaRAM], cmd, MAX_COMANDO_LEN - 1);
   filaRAM[totalFilaRAM][MAX_COMANDO_LEN - 1] = '\0';
   totalFilaRAM++;
   responder("OK_ADD"); 
 }
 
-void processarComando(const char* comando, bool fromRAM);
+void processarComando(const char* cmd, bool fromRAM);
 
 void executarFilaRAM() {
   if (totalFilaRAM == 0) { responder("ERR_EMPTY"); return; }
-  
-  responder("OK_RUN"); // Confirma inicio
-  
+  responder("OK_RUN"); 
   for (byte i = 0; i < totalFilaRAM; i++) {
-    char cmdTemp[MAX_COMANDO_LEN];
-    strcpy(cmdTemp, filaRAM[i]);
-    
-    processarComando(cmdTemp, true); 
-    
-    // --- NOVO: AVISA QUE TERMINOU ESTE PASSO ---
-    String stepMsg = "STEP_DONE ";
-    stepMsg += i;
-    responder(stepMsg);
-    // -------------------------------------------
-    
-    delay(200); // Pausa para estabilizar
+    char temp[MAX_COMANDO_LEN]; strcpy(temp, filaRAM[i]);
+    processarComando(temp, true); 
+    String msg = "STEP_DONE "; msg += i; responder(msg);
+    delay(200); 
   }
-  responder("FINISH");
-  totalFilaRAM = 0; 
+  responder("FINISH"); totalFilaRAM = 0; 
 }
 
-void filtrarComandoDabble(char* str) {
+void filtrar(char* str) {
   byte i = 0, j = 0;
   while (str[i] != '\0' && j < MAX_COMANDO_LEN - 1) {
     char c = str[i];
@@ -232,10 +165,8 @@ void filtrarComandoDabble(char* str) {
 
 void processarComando(const char* comando, bool fromRAM) {
   char cmdLimpo[MAX_COMANDO_LEN];
-  strncpy(cmdLimpo, comando, MAX_COMANDO_LEN - 1);
-  cmdLimpo[MAX_COMANDO_LEN - 1] = '\0';
-  filtrarComandoDabble(cmdLimpo);
-  if (strlen(cmdLimpo) == 0) return;
+  strncpy(cmdLimpo, comando, MAX_COMANDO_LEN - 1); cmdLimpo[MAX_COMANDO_LEN - 1] = '\0';
+  filtrar(cmdLimpo); if (strlen(cmdLimpo) == 0) return;
 
   if (strcmp(cmdLimpo, "LIMPARFILA") == 0) { limparFilaRAM(); return; }
   else if (strcmp(cmdLimpo, "EXECUTAR") == 0) { executarFilaRAM(); return; }
@@ -245,6 +176,7 @@ void processarComando(const char* comando, bool fromRAM) {
      sub[j] = '\0'; adicionarNaFilaRAM(sub); return;
   }
 
+  // --- COMANDOS FISICOS ---
   if (cmdLimpo[0] == 'F' && cmdLimpo[1] == '(') andarFrente(atoi(cmdLimpo + 2));
   else if (cmdLimpo[0] == 'T' && cmdLimpo[1] == '(') andarTras(atoi(cmdLimpo + 2));
   else if (cmdLimpo[0] == 'G' && cmdLimpo[1] == '(') {
@@ -252,44 +184,40 @@ void processarComando(const char* comando, bool fromRAM) {
   }
   else if (cmdLimpo[0] == 'E' && cmdLimpo[1] == '(') curvaEsquerda(atoi(cmdLimpo + 2));
   else if (cmdLimpo[0] == 'D' && cmdLimpo[1] == '(') curvaDireita(atoi(cmdLimpo + 2));
-  else if (cmdLimpo[0] == 'S' && cmdLimpo[1] == '(') moverServo(atoi(cmdLimpo + 2));
+  else if (cmdLimpo[0] == 'S' && cmdLimpo[1] == '(') { meuServo.write(atoi(cmdLimpo + 2)); }
+  
+  // --- NOVO COMANDO: OVO ---
+  else if (cmdLimpo[0] == 'O' && cmdLimpo[1] == '(') { depositarOvo(); } 
+  // -------------------------
+  
   else if (strcmp(cmdLimpo, "PARAR") == 0) parar();
 }
 
 void setup() {
-  Serial.begin(9600);
-  meuBT.begin(9600);
+  Serial.begin(9600); meuBT.begin(9600);
   pinMode(MOTOR_ESQ_FRENTE, OUTPUT); pinMode(MOTOR_ESQ_TRAS, OUTPUT);
   pinMode(MOTOR_DIR_FRENTE, OUTPUT); pinMode(MOTOR_DIR_TRAS, OUTPUT);
   pinMode(pinoEncoderEsq, INPUT_PULLUP); pinMode(pinoEncoderDir, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(pinoEncoderEsq), contarEsq, FALLING);
   attachInterrupt(digitalPinToInterrupt(pinoEncoderDir), contarDir, FALLING);
   meuServo.attach(SERVO_PIN); meuServo.write(0);
-  responder("EGG0-1 SAFE READY");
+  responder("EGG0-1 FINAL READY");
 }
 
 void loop() {
   if (meuBT.available()) {
-    char buffer[MAX_COMANDO_LEN]; byte index = 0;
-    unsigned long inicio = millis(); bool fim = false;
-    while (meuBT.available() && index < MAX_COMANDO_LEN - 1 && !fim) {
-      char c = meuBT.read();
-      if (c == '\\') fim = true; else buffer[index++] = c;
-      if (millis() - inicio > 100) break; 
+    char buf[MAX_COMANDO_LEN]; byte idx = 0; unsigned long ini = millis();
+    while (meuBT.available() && idx < MAX_COMANDO_LEN - 1) {
+      char c = meuBT.read(); if (c == '\\') break; buf[idx++] = c;
+      if (millis() - ini > 100) break; 
     }
-    buffer[index] = '\0';
-    if (index > 0) processarComando(buffer, false);
+    buf[idx] = '\0'; if (idx > 0) processarComando(buf, false);
   }
-  // USB fallback
   if (Serial.available()) {
-     char buffer[MAX_COMANDO_LEN]; byte index = 0;
-     while (Serial.available() && index < MAX_COMANDO_LEN - 1) {
-       char c = Serial.read();
-       if (c == '\n' || c == '\r' || c == '\\') break;
-       buffer[index++] = c;
-       delay(2);
+     char buf[MAX_COMANDO_LEN]; byte idx = 0;
+     while (Serial.available() && idx < MAX_COMANDO_LEN - 1) {
+       char c = Serial.read(); if (c == '\n' || c == '\\') break; buf[idx++] = c; delay(2);
      }
-     buffer[index] = '\0';
-     if (index > 0) processarComando(buffer, false);
+     buf[idx] = '\0'; if (idx > 0) processarComando(buf, false);
   }
 }
