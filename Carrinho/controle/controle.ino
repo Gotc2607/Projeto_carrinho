@@ -56,6 +56,7 @@ bool wait_movement(float distMetaEsq, float distMetaDir, unsigned long timeoutMs
     float acEsq = 0, acDir = 0;
     posicao(); 
     while(true) {
+        // TIMEOUT: Se estourar o tempo, para e avisa erro
         if (millis() - inicio > timeoutMs) { parar(); responder("ERR_TIMEOUT"); return false; }
         
         // Verifica se chegou
@@ -79,7 +80,10 @@ bool wait_movement(float distMetaEsq, float distMetaDir, unsigned long timeoutMs
 void andarFrente(int dist) {
   if (dist <= 0) return;
   if (dist > 200) dist = 200;
-  wait_movement(dist, dist, 3000 + (dist * 100));
+  // --- CORREÇÃO AQUI: AUMENTEI MUITO O TEMPO ---
+  // 10 segundos de base + 400ms por cada centimetro.
+  unsigned long t = 10000 + (dist * 400); 
+  wait_movement(dist, dist, t);
 }
 
 void andarTras(int dist) {
@@ -87,7 +91,8 @@ void andarTras(int dist) {
   float da = 0; posicao();
   unsigned long ini = millis();
   while(da < dist){
-    if (millis() - ini > 5000) break; // Timeout simples
+    // Timeout fixo de 15 segundos para ré
+    if (millis() - ini > 15000) break; 
     digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, HIGH);
     digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, HIGH);
     posicao(); da += distanciaEsq; delay(10);
@@ -95,12 +100,11 @@ void andarTras(int dist) {
   parar();
 }
 
-// --- NOVAS CURVAS (GIRO NO EIXO / SPIN TURN) ---
+// --- CURVAS (GIRO NO EIXO / SPIN TURN) ---
 // Uma roda vai pra frente, a outra pra trás. O raio é metade da largura (~10.25cm)
 
 void curvaEsquerda(int graus) {
   if (graus <= 0) return;
-  // Formula: Graus * (MetadeLargura * PI/180)
   float distAlvo = graus * (10.25 * 0.0174533); 
   
   unsigned long inicio = millis();
@@ -108,14 +112,14 @@ void curvaEsquerda(int graus) {
   posicao();
   
   while(acDir < distAlvo){
-    if (millis() - inicio > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
+    // AUMENTADO PARA 15 SEGUNDOS
+    if (millis() - inicio > 15000) { parar(); responder("ERR_TIMEOUT_G"); return; }
     
     // ESQUERDA: TRAS | DIREITA: FRENTE
     digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, HIGH);
     digitalWrite(MOTOR_DIR_FRENTE, HIGH); digitalWrite(MOTOR_DIR_TRAS, LOW);
     
     posicao(); 
-    // Usa a roda que vai pra frente como referência principal
     acDir += distanciaDir; 
     delay(10);
   }
@@ -131,7 +135,8 @@ void curvaDireita(int graus) {
   posicao();
   
   while(acEsq < distAlvo){
-    if (millis() - inicio > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
+    // AUMENTADO PARA 15 SEGUNDOS
+    if (millis() - inicio > 15000) { parar(); responder("ERR_TIMEOUT_G"); return; }
     
     // ESQUERDA: FRENTE | DIREITA: TRAS
     digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW);

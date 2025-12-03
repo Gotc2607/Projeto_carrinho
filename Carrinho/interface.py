@@ -1,5 +1,5 @@
 # =================================================================
-# == EGG0-1 - INTERFACE CORRIGIDA (ORDEM DE CRIAÇÃO)            ==
+# == EGG0-1 - INTERFACE ESTÁVEL (TIMEOUT AUMENTADO)             ==
 # =================================================================
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -152,11 +152,24 @@ def connect_serial():
         status_label.config(text="Simulação Ativa", foreground="orange")
         messagebox.showinfo("Modo Fantasma", "Conexão Simulada Ativa!")
         return
+    
+    # Tenta conectar
     try:
-        ser = serial.Serial(port_combobox.get(), 9600, timeout=1)
-        time.sleep(2)
+        port = port_combobox.get()
+        if not port:
+            messagebox.showwarning("Aviso", "Selecione uma porta COM!")
+            return
+
+        # --- AUMENTAMOS O TIMEOUT PARA 2 SEGUNDOS ---
+        ser = serial.Serial(port, 9600, timeout=2) 
+        
+        # Espera um pouco para o DTR resetar o Arduino (comportamento padrão)
+        time.sleep(2) 
+        
         status_label.config(text="Conectado!", foreground="green")
-    except Exception as e: status_label.config(text=str(e), foreground="red")
+    except Exception as e: 
+        status_label.config(text="Erro de Conexão", foreground="red")
+        messagebox.showerror("Erro de Conexão", f"Não foi possível conectar na porta {port}.\n\nDetalhes: {e}\n\nDica: Tente outra porta COM ou verifique se o Bluetooth está pareado.")
 
 def send_commands():
     cmds = command_listbox.get(0, tk.END)
@@ -167,7 +180,8 @@ def send_commands():
     def _wait_ack(ack):
         if ghost_mode_var.get(): time.sleep(0.05); return True
         st = time.time()
-        while time.time() - st < 3:
+        # Timeout de espera pelo ACK também um pouco maior
+        while time.time() - st < 4: 
             if ser.in_waiting:
                 try:
                     l = ser.readline().decode('utf-8', errors='ignore').strip()
@@ -182,7 +196,9 @@ def send_commands():
         status_label.config(text="Enviando...")
         try:
             if not ghost_mode_var.get(): ser.reset_input_buffer(); ser.write(b"LIMPARFILA\\")
-            if not _wait_ack("OK_CLR"): return
+            if not _wait_ack("OK_CLR"): 
+                status_label.config(text="Erro: Sem resposta (CLR)")
+                return
 
             for c in cmds:
                 p = c.split()
@@ -194,11 +210,15 @@ def send_commands():
                 
                 print(f">> {payload.strip()}")
                 if not ghost_mode_var.get(): ser.write(payload.encode())
-                if not _wait_ack("OK_ADD"): return
+                if not _wait_ack("OK_ADD"): 
+                    status_label.config(text="Erro: Sem resposta (ADD)")
+                    return
             
             status_label.config(text="Executando...")
             if not ghost_mode_var.get(): ser.write(b"EXECUTAR\\")
-            if not _wait_ack("OK_RUN"): return
+            if not _wait_ack("OK_RUN"): 
+                status_label.config(text="Erro: Sem resposta (RUN)")
+                return
 
             idx = 0
             while idx < len(cmds):
@@ -243,12 +263,11 @@ def reset_path():
     update_gui()
 
 def toggle_ui(*a):
-    # Essa função controla se a caixa de texto aparece ou não
     if cmd_type.get() in ["DIREITA", "ESQUERDA", "ENTREGAR"]: cmd_val.pack_forget()
     else: cmd_val.pack(fill="x", padx=5)
 
 init_db()
-root = tk.Tk(); root.title("EGG0-1 Final (Spin Turn)")
+root = tk.Tk(); root.title("EGG0-1 Final (Stable Connection)")
 main_frame = ttk.Frame(root, padding=5); main_frame.grid(row=0, column=0, sticky="nsew")
 
 canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken")
@@ -271,26 +290,17 @@ port_combobox.pack(fill="x", padx=5)
 ttk.Button(lf_conn, text="Conectar", command=connect_serial).pack(fill="x", padx=5)
 status_label = ttk.Label(lf_conn, text="Offline", foreground="blue"); status_label.pack(anchor="w", padx=5)
 
-# --- CORREÇÃO DA ORDEM DE CRIAÇÃO ---
+# --- CORREÇÃO DA ORDEM DE CRIAÇÃO (UI) ---
 lf_cmds = ttk.LabelFrame(tab_controle, text="Comandos"); lf_cmds.pack(fill="x", pady=5)
+cmd_val = ttk.Entry(lf_cmds); cmd_val.insert(0, "10"); 
+# NÃO FAZEMOS PACK AQUI. O toggle_ui vai fazer.
 
-# 1. Cria a caixa de valor (cmd_val) PRIMEIRO
-cmd_val = ttk.Entry(lf_cmds); 
-cmd_val.insert(0, "10"); 
-# (Não fazemos .pack() aqui porque o toggle_ui vai decidir isso)
-
-# 2. Cria o seletor de tipo
 cmd_type = tk.StringVar(value="FRENTE"); 
-
-# 3. Cria o OptionMenu
 ttk.OptionMenu(lf_cmds, cmd_type, "FRENTE", "FRENTE", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x", padx=5)
-
-# 4. Adiciona o botão
 ttk.Button(lf_cmds, text="Adicionar", command=add_cmd).pack(fill="x", padx=5)
 
-# 5. SÓ AGORA ativamos o "vigia" (trace) e chamamos a função
 cmd_type.trace_add("write", toggle_ui)
-toggle_ui() # Garante o estado inicial correto
+toggle_ui() # Configura o estado inicial correto
 # ------------------------------------
 
 lf_queue = ttk.LabelFrame(tab_controle, text="Fila"); lf_queue.pack(fill="both", expand=True, pady=5)
