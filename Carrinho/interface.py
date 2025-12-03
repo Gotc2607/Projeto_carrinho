@@ -1,8 +1,8 @@
 # =================================================================
-# == EGG0-1 - INTERFACE COM LOG VISUAL & HANDSHAKE ROBUSTO      ==
+# == EGG0-1 - INTERFACE BLINDADA (SYNC & TIMEOUT & GHOST)       ==
 # =================================================================
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox
 import math
 import serial
 import serial.tools.list_ports
@@ -19,7 +19,7 @@ supabase: Client = None
 
 # --- Constantes da GUI ---
 CANVAS_WIDTH = 600 
-CANVAS_HEIGHT = 500 # Reduzi um pouco para caber o log
+CANVAS_HEIGHT = 600
 SCALE = 0.7
 ROBOT_RADIUS = 10 * SCALE 
 
@@ -30,75 +30,43 @@ path_points = []
 cache_rotas_historico = []
 
 # =================================================================
-# FUNÇÃO DE LOG (NOVIDADE)
-# =================================================================
-def log_system(msg, tipo="INFO"):
-    """Escreve no terminal da interface e no console"""
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    full_msg = f"[{timestamp}] [{tipo}] {msg}"
-    print(full_msg) # Console do Python
-    
-    try:
-        # Insere no widget de texto da interface
-        log_widget.configure(state='normal') # Destrava para escrever
-        
-        tag = "normal"
-        if tipo == "ERRO": tag = "erro"
-        elif tipo == "RX": tag = "rx"
-        elif tipo == "TX": tag = "tx"
-        
-        log_widget.insert(tk.END, full_msg + "\n", tag)
-        log_widget.see(tk.END) # Auto-scroll para o final
-        log_widget.configure(state='disabled') # Trava para não editar
-    except:
-        pass
-
-# =================================================================
 # FUNÇÕES DE BANCO DE DADOS
 # =================================================================
 def init_db():
     global supabase
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        log_system("Supabase conectado.", "DB")
+        print("Supabase conectado.")
     except Exception as e:
-        log_system(f"Erro Supabase: {e}", "ERRO")
+        print(f"Erro Supabase: {e}")
 
 def salvar_rota_db():
     nome = nome_rota_entry.get()
     cmds = command_listbox.get(0, tk.END)
-    
     if not nome or not cmds:
-        log_system("Erro ao salvar: Nome ou comandos vazios", "ERRO")
+        status_label.config(text="Erro: Nome ou comandos vazios")
         return
-    
     status_label.config(text="Salvando...")
-    
     def _thread_save():
         try:
             res = supabase.table("rotas").insert({
-                "nome": nome, 
-                "data_criacao": datetime.now().isoformat()
+                "nome": nome, "data_criacao": datetime.now().isoformat()
             }).execute()
             new_id = res.data[0]['id']
-            
             payload = []
             for i, c in enumerate(cmds):
                 p = c.split()
                 val = float(p[1]) if len(p)>1 else 0.0
                 payload.append({"rota_id": new_id, "ordem": i, "comando": p[0], "valor": val})
-            
             supabase.table("comandos").insert(payload).execute()
-            root.after(0, lambda: log_system("Rota salva na nuvem com sucesso!", "DB"))
+            root.after(0, lambda: status_label.config(text="Salvo com sucesso!"))
             root.after(0, atualizar_historico)
-            root.after(0, lambda: status_label.config(text="Salvo!"))
         except Exception as e:
-            root.after(0, lambda: log_system(f"Erro ao salvar: {str(e)[:50]}", "ERRO"))
-
+            root.after(0, lambda: status_label.config(text=f"Erro: {str(e)[:30]}"))
     threading.Thread(target=_thread_save, daemon=True).start()
 
 def atualizar_historico():
-    history_status.config(text="Atualizando...")
+    history_status.config(text="Atualizando lista...")
     def _thread_list():
         global cache_rotas_historico
         try:
@@ -112,18 +80,15 @@ def atualizar_historico():
                 history_status.config(text="Lista atualizada.")
             root.after(0, _update_ui_list)
         except Exception as e:
-            root.after(0, lambda: log_system(f"Erro histórico: {e}", "ERRO"))
+            root.after(0, lambda: history_status.config(text=f"Erro: {e}"))
     threading.Thread(target=_thread_list, daemon=True).start()
 
 def carregar_rota_selecionada():
     selection = history_listbox.curselection()
     if not selection: return
-    
     index = selection[0]
     rota_dados = cache_rotas_historico[index]
-    
-    log_system(f"Carregando rota ID {rota_dados['id']}...", "DB")
-    
+    history_status.config(text=f"Carregando ID {rota_dados['id']}...")
     def _thread_load():
         try:
             res = supabase.table("comandos").select("*").eq("rota_id", rota_dados['id']).order("ordem").execute()
@@ -141,10 +106,10 @@ def carregar_rota_selecionada():
                     simular_movimento(cmd_str)
                     update_gui()
                 tabs.select(tab_controle)
-                log_system("Rota carregada e desenhada.", "INFO")
+                history_status.config(text="Rota carregada!")
             root.after(0, _aplicar_na_tela)
         except Exception as e:
-             root.after(0, lambda: log_system(f"Erro load: {e}", "ERRO"))
+             root.after(0, lambda: history_status.config(text=f"Erro load: {e}"))
     threading.Thread(target=_thread_load, daemon=True).start()
 
 # =================================================================
@@ -174,7 +139,6 @@ def update_gui():
     canvas.create_line(CANVAS_WIDTH/2, 0, CANVAS_WIDTH/2, CANVAS_HEIGHT, fill="#eee")
     canvas.create_line(0, CANVAS_HEIGHT/2, CANVAS_WIDTH, CANVAS_HEIGHT/2, fill="#eee")
     if len(path_points) > 1: canvas.create_line(path_points, fill="blue", width=2)
-    
     canvas.create_oval(cx-ROBOT_RADIUS, cy-ROBOT_RADIUS, cx+ROBOT_RADIUS, cy+ROBOT_RADIUS, fill="red")
     ex = cx + ROBOT_RADIUS*1.5 * math.cos(math.radians(robot_theta))
     ey = cy - ROBOT_RADIUS*1.5 * math.sin(math.radians(robot_theta))
@@ -182,40 +146,18 @@ def update_gui():
 
 def connect_serial():
     global ser
-    
-    # === MODO FANTASMA ===
     if ghost_mode_var.get():
         status_label.config(text="Modo Simulação Ativo", foreground="orange")
-        log_system("Conectado em MODO SIMULAÇÃO (Sem Arduino).", "INFO")
+        messagebox.showinfo("Modo Fantasma", "Conexão Simulada!\nComandos visuais apenas.")
         return
-    # =====================
-
     try:
-        porta = port_combobox.get()
-        ser = serial.Serial(porta, 9600, timeout=1)
+        ser = serial.Serial(port_combobox.get(), 9600, timeout=1)
         time.sleep(2)
-        status_label.config(text=f"Conectado em {porta}", foreground="green")
-        log_system(f"Porta Serial {porta} aberta com sucesso.", "INFO")
-        threading.Thread(target=read_serial_monitor, daemon=True).start()
-    except Exception as e: 
-        status_label.config(text="Erro Conexão", foreground="red")
-        log_system(f"Falha ao abrir serial: {e}", "ERRO")
-
-def read_serial_monitor():
-    """Lê mensagens soltas do Arduino (Logs de erro, Debug)"""
-    while ser and ser.is_open:
-        try: 
-            if ser.in_waiting > 0:
-                # Apenas lê se não estivermos num envio de lote (para não roubar a resposta)
-                # Mas como o _wait_for_ack consome, aqui pegamos so o 'lixo' ou logs espontaneos
-                line = ser.readline().decode('utf-8', errors='ignore').strip()
-                if line:
-                    log_system(f"Arduino diz: {line}", "RX")
-        except: pass
-        time.sleep(0.1)
+        status_label.config(text="Conectado (Hardware)!", foreground="green")
+    except Exception as e: status_label.config(text=str(e), foreground="red")
 
 def send_commands():
-    """ENVIA LOTE COM LOG DETALHADO"""
+    """ENVIA E SINCRONIZA COM ARDUINO (COM FEEDBACK)"""
     cmds = command_listbox.get(0, tk.END)
     
     if not ghost_mode_var.get() and (not ser or not ser.is_open):
@@ -224,94 +166,92 @@ def send_commands():
 
     def _wait_for_ack(expected_ack, timeout=3.0):
         if ghost_mode_var.get():
-            time.sleep(0.05) 
-            return True, "GHOST_OK"
-
-        start_time = time.time()
-        while (time.time() - start_time) < timeout:
+            time.sleep(0.05); return True, "GHOST_OK"
+        start = time.time()
+        while (time.time() - start) < timeout:
             if ser.in_waiting > 0:
                 try:
                     line = ser.readline().decode('utf-8', errors='ignore').strip()
-                    if line:
-                        # Loga o que recebeu
-                        log_system(f"Resp: {line}", "RX")
-                        
-                        if "ERR_FULL" in line: return False, "Memória Cheia!"
-                        if "ERR_FMT" in line: return False, "Erro Formato!"
-                        if "LOG:" in line: continue # Ignora logs de debug na verificação de ACK
-                        if expected_ack in line: return True, "OK"
+                    print(f"[Arduino ACK]: {line}") 
+                    if "ERR_FULL" in line: return False, "Memória Cheia!"
+                    if "ERR_FMT" in line: return False, "Erro Formato!"
+                    if expected_ack in line: return True, "OK"
                 except: pass
             time.sleep(0.01)
         return False, "Timeout (Sem resposta)"
 
     def _run_batch():
-        log_system("=== INICIANDO ENVIO DE LOTE ===", "INFO")
         status_label.config(text="Iniciando Envio...")
-        
         try:
             if not ghost_mode_var.get(): ser.reset_input_buffer() 
             
-            # 1. LIMPAR
-            log_system("Enviando comando: LIMPARFILA", "TX")
+            # 1. LIMPAR E ENVIAR (Protocolo de Handshake)
+            print(">> [CMD] LIMPARFILA")
             if not ghost_mode_var.get(): ser.write(b"LIMPARFILA\\")
-            
-            success, msg = _wait_for_ack("OK_CLR")
-            if not success:
-                log_system(f"Falha ao limpar: {msg}", "ERRO")
-                messagebox.showerror("Erro", f"Falha ao limpar:\n{msg}")
-                return
+            if not _wait_for_ack("OK_CLR")[0]: 
+                status_label.config(text="Erro ao limpar."); return
 
-            # 2. ENVIAR
             total = len(cmds)
             for i, c in enumerate(cmds):
                 status_label.config(text=f"Enviando {i+1}/{total}...")
-                p = c.split()
+                p = c.split(); letra = p[0][0]; valor = p[1] if len(p)>1 else "0"
+                payload = f"ADD({letra}({valor}))\\"
+                print(f">> [CMD] {payload.strip()}")
                 
-                cmd_interno = ""
-                if p[0] == "ENTREGAR":
-                    cmd_interno = "S(90)"
-                else:
-                    letra = p[0][0] 
-                    valor = p[1] if len(p) > 1 else "0"
-                    cmd_interno = f"{letra}({valor})"
-                
-                payload = f"ADD({cmd_interno})\\"
-                
-                log_system(f"Enviando ({i+1}/{total}): {payload.strip()}", "TX")
                 if not ghost_mode_var.get(): ser.write(payload.encode())
-                
-                success, msg = _wait_for_ack("OK_ADD")
-                if not success:
-                    log_system(f"Falha no comando {c}: {msg}", "ERRO")
-                    messagebox.showerror("Erro", f"Falha no comando {c}:\n{msg}")
-                    return
+                if not _wait_for_ack("OK_ADD")[0]:
+                    status_label.config(text=f"Erro no cmd {i}"); return
 
-            # 3. EXECUTAR
-            status_label.config(text="Executando...")
-            log_system("Enviando comando: EXECUTAR", "TX")
+            # 2. START EXECUÇÃO
+            status_label.config(text="Executando Percurso...")
+            print(">> [CMD] EXECUTAR")
             if not ghost_mode_var.get(): ser.write(b"EXECUTAR\\")
             
-            success, msg = _wait_for_ack("OK_RUN")
-            if success:
-                status_label.config(text="Carrinho em movimento!")
-                log_system("Confirmação de execução recebida (OK_RUN)", "RX")
-            else:
-                log_system(f"Erro ao iniciar: {msg}", "ERRO")
-                status_label.config(text=f"Erro Start: {msg}")
+            if not _wait_for_ack("OK_RUN")[0]:
+                status_label.config(text="Erro ao iniciar."); return
 
-            # ANIMAÇÃO
-            log_system("Iniciando animação visual...", "INFO")
-            for c in cmds:
-                simular_movimento(c)
-                root.after(0, update_gui)
-                time.sleep(0.5)
+            # 3. LOOP DE SINCRONIA (A GRANDE MUDANÇA)
+            print("--- Aguardando Passos do Robô ---")
+            passo_atual = 0
+            
+            while passo_atual < total:
+                
+                # A. MODO FANTASMA (Simulação pura)
+                if ghost_mode_var.get():
+                    time.sleep(0.5) # Simula tempo do robô
+                    simular_movimento(cmds[passo_atual])
+                    root.after(0, update_gui)
+                    passo_atual += 1
+                    continue
 
-            log_system("=== LOTE CONCLUÍDO ===", "INFO")
-            status_label.config(text="Concluído.")
+                # B. MODO REAL (Hardware Feedback)
+                if ser.in_waiting > 0:
+                    try:
+                        line = ser.readline().decode('utf-8', errors='ignore').strip()
+                        print(f"[Arduino Run]: {line}")
+                        
+                        if "STEP_DONE" in line:
+                            # Robô terminou um passo! Atualiza mapa.
+                            simular_movimento(cmds[passo_atual])
+                            root.after(0, update_gui)
+                            passo_atual += 1
+                            
+                        elif "ERR_TIMEOUT" in line:
+                            messagebox.showerror("ALERTA", "O robô parou por segurança (Timeout)!\nVerifique se bateu ou travou.")
+                            status_label.config(text="Travado/Timeout")
+                            return # Encerra tudo
+                            
+                        elif "FINISH" in line:
+                            break # Acabou tudo
+                    except: pass
+                
+                time.sleep(0.01)
+
+            status_label.config(text="Percurso Concluído.")
 
         except Exception as e:
-            log_system(f"Exceção fatal: {e}", "ERRO")
-            root.after(0, lambda: status_label.config(text="Erro fatal"))
+            print(f"Erro: {e}")
+            root.after(0, lambda: status_label.config(text=f"Erro: {e}"))
 
     threading.Thread(target=_run_batch, daemon=True).start()
 
@@ -321,69 +261,53 @@ def add_cmd():
         command_listbox.insert(tk.END, t)
     elif t in ["DIREITA", "ESQUERDA"]:
         command_listbox.insert(tk.END, f"{t} 90")
-    else: 
+    else: # FRENTE, TRAS
         v = cmd_val.get()
-        if not v or not v.replace('.', '', 1).isdigit():
-            messagebox.showwarning("Aviso", "Valor inválido.")
-            return
+        if not v or not v.replace('.', '', 1).isdigit(): return
         command_listbox.insert(tk.END, f"{t} {v}")
 
-def clear_commands(): 
-    command_listbox.delete(0, tk.END)
-    log_system("Fila de comandos limpa.", "INFO")
-
+def clear_commands(): command_listbox.delete(0, tk.END)
 def reset_path(): 
     global path_points, robot_x, robot_y, robot_theta
     path_points.clear(); robot_x=0; robot_y=0; robot_theta=0
     update_gui()
-    log_system("Mapa resetado.", "INFO")
 
 def toggle_val_entry(*args):
-    current_type = cmd_type.get()
-    if current_type in ["DIREITA", "ESQUERDA", "ENTREGAR"]:
-        cmd_val.pack_forget()
-        cmd_val.delete(0, tk.END)
-        cmd_val.insert(0, "90")
+    if cmd_type.get() in ["DIREITA", "ESQUERDA", "ENTREGAR"]:
+        cmd_val.pack_forget() 
     else:
-        cmd_val.pack(fill="x", padx=5)
-        if cmd_val.get() == "0" or not cmd_val.get():
-             cmd_val.delete(0, tk.END)
-             cmd_val.insert(0, "10")
+        cmd_val.pack(fill="x", padx=5) 
+        if not cmd_val.get(): cmd_val.insert(0, "10")
 
 # =================================================================
 # SETUP GUI
 # =================================================================
 init_db()
 root = tk.Tk()
-root.title("EGG0-1 Control Station")
+root.title("EGG0-1 Control (Sync + Safety)")
 
-# Layout Principal
 main_frame = ttk.Frame(root, padding=5)
 main_frame.grid(row=0, column=0, sticky="nsew")
 
-# --- ÁREA SUPERIOR: MAPA E CONTROLES ---
-top_frame = ttk.Frame(main_frame)
-top_frame.grid(row=0, column=0, sticky="nsew")
+canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken")
+canvas.grid(row=0, column=0, rowspan=2, padx=5, pady=5)
 
-# MAPA
-canvas = tk.Canvas(top_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken")
-canvas.grid(row=0, column=0, padx=5, pady=5)
-
-# PAINEL CONTROLES
-right_panel = ttk.Frame(top_frame)
+right_panel = ttk.Frame(main_frame)
 right_panel.grid(row=0, column=1, sticky="ns")
 
 tabs = ttk.Notebook(right_panel)
-tabs.pack(fill="both", expand=True)
+tabs.grid(row=0, column=0, sticky="nsew")
 
-# ABA 1 - Controle
 tab_controle = ttk.Frame(tabs, padding=10)
 tabs.add(tab_controle, text="Controle")
 
 lf_conn = ttk.LabelFrame(tab_controle, text="Conexão")
 lf_conn.pack(fill="x", pady=5)
+
 ghost_mode_var = tk.BooleanVar(value=False)
-ttk.Checkbutton(lf_conn, text="Modo Simulação", variable=ghost_mode_var).pack(anchor="w", padx=5)
+chk_ghost = ttk.Checkbutton(lf_conn, text="Modo Simulação (Sem Arduino)", variable=ghost_mode_var)
+chk_ghost.pack(anchor="w", padx=5)
+
 try: ports = [p.device for p in serial.tools.list_ports.comports()]
 except: ports = []
 port_combobox = ttk.Combobox(lf_conn, values=ports); 
@@ -404,7 +328,7 @@ toggle_val_entry()
 
 lf_queue = ttk.LabelFrame(tab_controle, text="Fila")
 lf_queue.pack(fill="both", expand=True, pady=5)
-command_listbox = tk.Listbox(lf_queue, height=6)
+command_listbox = tk.Listbox(lf_queue, height=8)
 command_listbox.pack(fill="both", expand=True, padx=5)
 ttk.Button(lf_queue, text="Limpar", command=clear_commands).pack(side="left")
 ttk.Button(lf_queue, text="EXECUTAR LOTE", command=send_commands).pack(side="right")
@@ -416,29 +340,14 @@ nome_rota_entry = ttk.Entry(lf_save); nome_rota_entry.pack(fill="x")
 ttk.Button(lf_save, text="Salvar na Nuvem", command=salvar_rota_db).pack(fill="x")
 ttk.Button(lf_save, text="Resetar Mapa", command=reset_path).pack(fill="x")
 
-# ABA 2 - Histórico
 tab_historico = ttk.Frame(tabs, padding=10)
 tabs.add(tab_historico, text="Histórico")
-history_listbox = tk.Listbox(tab_historico, height=15)
+history_listbox = tk.Listbox(tab_historico, height=20)
 history_listbox.pack(fill="both", expand=True)
 ttk.Button(tab_historico, text="Atualizar Lista", command=atualizar_historico).pack(fill="x")
 ttk.Button(tab_historico, text="CARREGAR ROTA", command=carregar_rota_selecionada).pack(fill="x")
 history_status = ttk.Label(tab_historico, text="...")
 history_status.pack(anchor="w")
 
-# --- ÁREA INFERIOR: MONITOR DE LOGS (NOVO) ---
-log_frame = ttk.LabelFrame(main_frame, text="Monitor Serial / Logs")
-log_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-
-log_widget = scrolledtext.ScrolledText(log_frame, height=8, state='disabled', font=("Consolas", 9))
-log_widget.pack(fill="both", expand=True)
-
-# Configurando cores para as tags do log
-log_widget.tag_config("erro", foreground="red")
-log_widget.tag_config("tx", foreground="green") # Enviado (Verde)
-log_widget.tag_config("rx", foreground="blue")  # Recebido (Azul)
-log_widget.tag_config("normal", foreground="black")
-
 update_gui()
-log_system("Sistema iniciado.", "INFO")
 root.mainloop()
