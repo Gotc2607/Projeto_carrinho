@@ -50,17 +50,20 @@ void parar() {
   digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, LOW);
 }
 
-// --- MOVIMENTOS ---
+// --- MOVIMENTOS LINEARES (FRENTE/TRAS) ---
 bool wait_movement(float distMetaEsq, float distMetaDir, unsigned long timeoutMs) {
     unsigned long inicio = millis();
     float acEsq = 0, acDir = 0;
     posicao(); 
     while(true) {
         if (millis() - inicio > timeoutMs) { parar(); responder("ERR_TIMEOUT"); return false; }
+        
+        // Verifica se chegou
         bool esqOk = (distMetaEsq <= 0) || (acEsq >= distMetaEsq);
         bool dirOk = (distMetaDir <= 0) || (acDir >= distMetaDir);
         if (esqOk && dirOk) break;
         
+        // Controle simples ON/OFF
         if (!esqOk) { digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW); }
         else { digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, LOW); }
         
@@ -82,7 +85,9 @@ void andarFrente(int dist) {
 void andarTras(int dist) {
   if (dist <= 0) return;
   float da = 0; posicao();
+  unsigned long ini = millis();
   while(da < dist){
+    if (millis() - ini > 5000) break; // Timeout simples
     digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, HIGH);
     digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, HIGH);
     posicao(); da += distanciaEsq; delay(10);
@@ -90,38 +95,60 @@ void andarTras(int dist) {
   parar();
 }
 
+// --- NOVAS CURVAS (GIRO NO EIXO / SPIN TURN) ---
+// Uma roda vai pra frente, a outra pra trás. O raio é metade da largura (~10.25cm)
+
 void curvaEsquerda(int graus) {
   if (graus <= 0) return;
-  float alvo = graus * (20.5 * 0.0174533); 
-  unsigned long ini = millis(); float ac = 0; posicao();
-  while(ac < alvo){
-    if (millis() - ini > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
-    digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, LOW);
+  // Formula: Graus * (MetadeLargura * PI/180)
+  float distAlvo = graus * (10.25 * 0.0174533); 
+  
+  unsigned long inicio = millis();
+  float acDir = 0; 
+  posicao();
+  
+  while(acDir < distAlvo){
+    if (millis() - inicio > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
+    
+    // ESQUERDA: TRAS | DIREITA: FRENTE
+    digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, HIGH);
     digitalWrite(MOTOR_DIR_FRENTE, HIGH); digitalWrite(MOTOR_DIR_TRAS, LOW);
-    posicao(); ac += distanciaDir; delay(10);
+    
+    posicao(); 
+    // Usa a roda que vai pra frente como referência principal
+    acDir += distanciaDir; 
+    delay(10);
   }
   parar();
 }
 
 void curvaDireita(int graus) {
   if (graus <= 0) return;
-  float alvo = graus * (20.5 * 0.0174533); 
-  unsigned long ini = millis(); float ac = 0; posicao();
-  while(ac < alvo){
-    if (millis() - ini > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
+  float distAlvo = graus * (10.25 * 0.0174533); 
+  
+  unsigned long inicio = millis();
+  float acEsq = 0;
+  posicao();
+  
+  while(acEsq < distAlvo){
+    if (millis() - inicio > 5000) { parar(); responder("ERR_TIMEOUT_G"); return; }
+    
+    // ESQUERDA: FRENTE | DIREITA: TRAS
     digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW);
-    digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, LOW);
-    posicao(); ac += distanciaEsq; delay(10);
+    digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, HIGH);
+    
+    posicao(); 
+    acEsq += distanciaEsq;
+    delay(10);
   }
   parar();
 }
 
-// --- FUNÇÃO DO OVO (SERVO) ---
+// --- FUNÇÃO DO OVO ---
 void depositarOvo() {
-  // Movimento de "Varredura" para soltar o ovo
-  meuServo.write(90); // Abre/Empurra
-  delay(1000);        // Espera cair
-  meuServo.write(0);  // Retorna/Fecha
+  meuServo.write(90); // Abre
+  delay(1000);        
+  meuServo.write(0);  // Fecha
   delay(500);
 }
 
@@ -145,7 +172,7 @@ void executarFilaRAM() {
     char temp[MAX_COMANDO_LEN]; strcpy(temp, filaRAM[i]);
     processarComando(temp, true); 
     String msg = "STEP_DONE "; msg += i; responder(msg);
-    delay(200); 
+    delay(300); // Pausa para estabilizar entre movimentos
   }
   responder("FINISH"); totalFilaRAM = 0; 
 }
@@ -176,7 +203,6 @@ void processarComando(const char* comando, bool fromRAM) {
      sub[j] = '\0'; adicionarNaFilaRAM(sub); return;
   }
 
-  // --- COMANDOS FISICOS ---
   if (cmdLimpo[0] == 'F' && cmdLimpo[1] == '(') andarFrente(atoi(cmdLimpo + 2));
   else if (cmdLimpo[0] == 'T' && cmdLimpo[1] == '(') andarTras(atoi(cmdLimpo + 2));
   else if (cmdLimpo[0] == 'G' && cmdLimpo[1] == '(') {
@@ -185,11 +211,7 @@ void processarComando(const char* comando, bool fromRAM) {
   else if (cmdLimpo[0] == 'E' && cmdLimpo[1] == '(') curvaEsquerda(atoi(cmdLimpo + 2));
   else if (cmdLimpo[0] == 'D' && cmdLimpo[1] == '(') curvaDireita(atoi(cmdLimpo + 2));
   else if (cmdLimpo[0] == 'S' && cmdLimpo[1] == '(') { meuServo.write(atoi(cmdLimpo + 2)); }
-  
-  // --- NOVO COMANDO: OVO ---
   else if (cmdLimpo[0] == 'O' && cmdLimpo[1] == '(') { depositarOvo(); } 
-  // -------------------------
-  
   else if (strcmp(cmdLimpo, "PARAR") == 0) parar();
 }
 
@@ -201,7 +223,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(pinoEncoderEsq), contarEsq, FALLING);
   attachInterrupt(digitalPinToInterrupt(pinoEncoderDir), contarDir, FALLING);
   meuServo.attach(SERVO_PIN); meuServo.write(0);
-  responder("EGG0-1 FINAL READY");
+  responder("EGG0-1 SPIN READY");
 }
 
 void loop() {

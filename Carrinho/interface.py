@@ -1,5 +1,5 @@
 # =================================================================
-# == EGG0-1 - INTERFACE COM ANIMAÇÃO DE ENTREGA (VISUAL OVO)    ==
+# == EGG0-1 - INTERFACE CORRIGIDA (ORDEM DE CRIAÇÃO)            ==
 # =================================================================
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -27,7 +27,7 @@ ROBOT_RADIUS = 10 * SCALE
 ser = None
 robot_x, robot_y, robot_theta = 0, 0, 0 
 path_points = []
-ovos_entregues = [] # Lista de coordenadas onde ovos foram deixados
+ovos_entregues = [] 
 cache_rotas_historico = []
 
 # =================================================================
@@ -87,7 +87,7 @@ def carregar_rota_selecionada():
                     c = it['comando']
                     if c != "ENTREGAR": c += f" {it['valor']}"
                     command_listbox.insert(tk.END, c)
-                    simular_movimento(c, animate=False) # Só calcula posição final
+                    simular_movimento(c, animate=False) 
                     update_gui()
                 tabs.select(tab_controle)
             root.after(0, _apply)
@@ -112,24 +112,17 @@ def simular_movimento(cmd_str, animate=True):
     elif tipo == "DIREITA": robot_theta -= val
     robot_theta %= 360
     
-    # --- LÓGICA DA ENTREGA ---
     if tipo == "ENTREGAR":
-        # Salva a coordenada atual como um ponto de entrega
         ovos_entregues.append((
             (CANVAS_WIDTH/2) + (robot_x * SCALE), 
             (CANVAS_HEIGHT/2) - (robot_y * SCALE)
         ))
-        
-        # --- ANIMAÇÃO VISUAL ---
         if animate:
-            # Efeito Piscar: Dourado -> Vermelho
             for _ in range(3):
-                canvas.itemconfig("robo_body", fill="gold") # Muda cor
-                root.update()
-                time.sleep(0.15)
-                canvas.itemconfig("robo_body", fill="red")  # Volta cor
-                root.update()
-                time.sleep(0.15)
+                canvas.itemconfig("robo_body", fill="gold") 
+                root.update(); time.sleep(0.15)
+                canvas.itemconfig("robo_body", fill="red")
+                root.update(); time.sleep(0.15)
 
 def update_gui():
     cx = (CANVAS_WIDTH/2) + (robot_x * SCALE)
@@ -137,22 +130,15 @@ def update_gui():
     if not path_points or (path_points[-1] != (cx, cy)): path_points.append((cx, cy))
     
     canvas.delete("all")
-    # Grid
     canvas.create_line(CANVAS_WIDTH/2, 0, CANVAS_WIDTH/2, CANVAS_HEIGHT, fill="#eee")
     canvas.create_line(0, CANVAS_HEIGHT/2, CANVAS_WIDTH, CANVAS_HEIGHT/2, fill="#eee")
     
-    # Rastro Azul
     if len(path_points) > 1: canvas.create_line(path_points, fill="blue", width=2)
     
-    # --- DESENHA OS OVOS ENTREGUES ---
     for (ox, oy) in ovos_entregues:
-        # Desenha um círculo amarelo com borda preta onde o ovo foi deixado
         canvas.create_oval(ox-5, oy-5, ox+5, oy+5, fill="gold", outline="black", width=1)
     
-    # Robô (Com TAG "robo_body" para animação)
     canvas.create_oval(cx-ROBOT_RADIUS, cy-ROBOT_RADIUS, cx+ROBOT_RADIUS, cy+ROBOT_RADIUS, fill="red", tags="robo_body")
-    
-    # Direção
     ex = cx + ROBOT_RADIUS*1.5 * math.cos(math.radians(robot_theta))
     ey = cy - ROBOT_RADIUS*1.5 * math.sin(math.radians(robot_theta))
     canvas.create_line(cx, cy, ex, ey, fill="black", width=2)
@@ -164,6 +150,7 @@ def connect_serial():
     global ser
     if ghost_mode_var.get():
         status_label.config(text="Simulação Ativa", foreground="orange")
+        messagebox.showinfo("Modo Fantasma", "Conexão Simulada Ativa!")
         return
     try:
         ser = serial.Serial(port_combobox.get(), 9600, timeout=1)
@@ -199,10 +186,8 @@ def send_commands():
 
             for c in cmds:
                 p = c.split()
-                # --- CORREÇÃO DO CONFLITO E vs E ---
                 if p[0] == "ENTREGAR":
-                    # Manda 'O' de Ovo/Open para diferenciar de 'E'squerda
-                    payload = "ADD(O(0))\\"
+                    payload = "ADD(O(0))\\" # O de Ovo
                 else:
                     l = p[0][0]; v = p[1] if len(p)>1 else "0"
                     payload = f"ADD({l}({v}))\\"
@@ -215,17 +200,15 @@ def send_commands():
             if not ghost_mode_var.get(): ser.write(b"EXECUTAR\\")
             if not _wait_ack("OK_RUN"): return
 
-            # --- LOOP DE SINCRONIA ---
             idx = 0
             while idx < len(cmds):
                 if ghost_mode_var.get():
-                    time.sleep(0.5) # Tempo simulado
+                    time.sleep(0.5)
                     simular_movimento(cmds[idx], animate=True)
                     root.after(0, update_gui)
                     idx += 1
                     continue
                 
-                # Leitura Hardware
                 if ser.in_waiting:
                     l = ser.readline().decode(errors='ignore').strip()
                     print(f"[RUN]: {l}")
@@ -235,11 +218,10 @@ def send_commands():
                         idx += 1
                     elif "FINISH" in l: break
                     elif "ERR" in l: 
-                        messagebox.showerror("Erro", "Falha no Robô!"); return
+                        messagebox.showerror("Erro", "Falha no Robô (Colisão/Timeout)!"); return
                 time.sleep(0.01)
             
             status_label.config(text="Concluído!")
-
         except Exception as e: print(e)
 
     threading.Thread(target=_run, daemon=True).start()
@@ -261,11 +243,12 @@ def reset_path():
     update_gui()
 
 def toggle_ui(*a):
+    # Essa função controla se a caixa de texto aparece ou não
     if cmd_type.get() in ["DIREITA", "ESQUERDA", "ENTREGAR"]: cmd_val.pack_forget()
     else: cmd_val.pack(fill="x", padx=5)
 
 init_db()
-root = tk.Tk(); root.title("EGG0-1 Final")
+root = tk.Tk(); root.title("EGG0-1 Final (Spin Turn)")
 main_frame = ttk.Frame(root, padding=5); main_frame.grid(row=0, column=0, sticky="nsew")
 
 canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken")
@@ -274,43 +257,59 @@ canvas.grid(row=0, column=0, rowspan=2, padx=5, pady=5)
 panel = ttk.Frame(main_frame); panel.grid(row=0, column=1, sticky="ns")
 tabs = ttk.Notebook(panel); tabs.grid(row=0, column=0, sticky="nsew")
 
-# Aba Controle
-t_ctrl = ttk.Frame(tabs, padding=10); tabs.add(t_ctrl, text="Controle")
-lf_con = ttk.LabelFrame(t_ctrl, text="Conexão"); lf_con.pack(fill="x", pady=5)
+# === ABA CONTROLE ===
+tab_controle = ttk.Frame(tabs, padding=10); tabs.add(tab_controle, text="Controle")
+
+lf_conn = ttk.LabelFrame(tab_controle, text="Conexão"); lf_conn.pack(fill="x", pady=5)
 ghost_mode_var = tk.BooleanVar(value=False)
-ttk.Checkbutton(lf_con, text="Modo Simulação", variable=ghost_mode_var).pack(anchor="w", padx=5)
+ttk.Checkbutton(lf_conn, text="Modo Simulação", variable=ghost_mode_var).pack(anchor="w", padx=5)
 try: pts = [p.device for p in serial.tools.list_ports.comports()]
 except: pts = []
-port_combobox = ttk.Combobox(lf_con, values=pts); 
+port_combobox = ttk.Combobox(lf_conn, values=pts); 
 if pts: port_combobox.current(0)
 port_combobox.pack(fill="x", padx=5)
-ttk.Button(lf_con, text="Conectar", command=connect_serial).pack(fill="x", padx=5)
-status_label = ttk.Label(lf_con, text="Offline", foreground="blue"); status_label.pack(anchor="w", padx=5)
+ttk.Button(lf_conn, text="Conectar", command=connect_serial).pack(fill="x", padx=5)
+status_label = ttk.Label(lf_conn, text="Offline", foreground="blue"); status_label.pack(anchor="w", padx=5)
 
-lf_cmd = ttk.LabelFrame(t_ctrl, text="Comandos"); lf_cmd.pack(fill="x", pady=5)
-cmd_type = tk.StringVar(value="FRENTE"); cmd_type.trace_add("write", toggle_ui)
-ttk.OptionMenu(lf_cmd, cmd_type, "FRENTE", "FRENTE", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x", padx=5)
-cmd_val = ttk.Entry(lf_cmd); cmd_val.insert(0, "10"); 
-ttk.Button(lf_cmd, text="Adicionar", command=add_cmd).pack(fill="x", padx=5)
-toggle_ui()
+# --- CORREÇÃO DA ORDEM DE CRIAÇÃO ---
+lf_cmds = ttk.LabelFrame(tab_controle, text="Comandos"); lf_cmds.pack(fill="x", pady=5)
 
-lf_q = ttk.LabelFrame(t_ctrl, text="Fila"); lf_q.pack(fill="both", expand=True, pady=5)
-command_listbox = tk.Listbox(lf_q, height=8); command_listbox.pack(fill="both", expand=True, padx=5)
-ttk.Button(lf_q, text="Limpar", command=clear_commands).pack(side="left")
-ttk.Button(lf_q, text="EXECUTAR", command=send_commands).pack(side="right")
+# 1. Cria a caixa de valor (cmd_val) PRIMEIRO
+cmd_val = ttk.Entry(lf_cmds); 
+cmd_val.insert(0, "10"); 
+# (Não fazemos .pack() aqui porque o toggle_ui vai decidir isso)
 
-lf_s = ttk.LabelFrame(t_ctrl, text="Salvar"); lf_s.pack(fill="x", pady=5)
-ttk.Label(lf_s, text="Nome:").pack(anchor="w")
-nome_rota_entry = ttk.Entry(lf_s); nome_rota_entry.pack(fill="x")
-ttk.Button(lf_s, text="Salvar na Nuvem", command=salvar_rota_db).pack(fill="x")
-ttk.Button(lf_s, text="Resetar Mapa", command=reset_path).pack(fill="x")
+# 2. Cria o seletor de tipo
+cmd_type = tk.StringVar(value="FRENTE"); 
 
-# Aba Historico
-t_hist = ttk.Frame(tabs, padding=10); tabs.add(t_hist, text="Histórico")
-history_listbox = tk.Listbox(t_hist, height=20); history_listbox.pack(fill="both", expand=True)
-ttk.Button(t_hist, text="Atualizar", command=atualizar_historico).pack(fill="x")
-ttk.Button(t_hist, text="Carregar", command=carregar_rota_selecionada).pack(fill="x")
-history_status = ttk.Label(t_hist, text="..."); history_status.pack(anchor="w")
+# 3. Cria o OptionMenu
+ttk.OptionMenu(lf_cmds, cmd_type, "FRENTE", "FRENTE", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x", padx=5)
+
+# 4. Adiciona o botão
+ttk.Button(lf_cmds, text="Adicionar", command=add_cmd).pack(fill="x", padx=5)
+
+# 5. SÓ AGORA ativamos o "vigia" (trace) e chamamos a função
+cmd_type.trace_add("write", toggle_ui)
+toggle_ui() # Garante o estado inicial correto
+# ------------------------------------
+
+lf_queue = ttk.LabelFrame(tab_controle, text="Fila"); lf_queue.pack(fill="both", expand=True, pady=5)
+command_listbox = tk.Listbox(lf_queue, height=8); command_listbox.pack(fill="both", expand=True, padx=5)
+ttk.Button(lf_queue, text="Limpar", command=clear_commands).pack(side="left")
+ttk.Button(lf_queue, text="EXECUTAR", command=send_commands).pack(side="right")
+
+lf_save = ttk.LabelFrame(tab_controle, text="Salvar"); lf_save.pack(fill="x", pady=5)
+ttk.Label(lf_save, text="Nome:").pack(anchor="w")
+nome_rota_entry = ttk.Entry(lf_save); nome_rota_entry.pack(fill="x")
+ttk.Button(lf_save, text="Salvar na Nuvem", command=salvar_rota_db).pack(fill="x")
+ttk.Button(lf_save, text="Resetar Mapa", command=reset_path).pack(fill="x")
+
+# === ABA HISTÓRICO ===
+tab_historico = ttk.Frame(tabs, padding=10); tabs.add(tab_historico, text="Histórico")
+history_listbox = tk.Listbox(tab_historico, height=20); history_listbox.pack(fill="both", expand=True)
+ttk.Button(tab_historico, text="Atualizar", command=atualizar_historico).pack(fill="x")
+ttk.Button(tab_historico, text="Carregar", command=carregar_rota_selecionada).pack(fill="x")
+history_status = ttk.Label(tab_historico, text="..."); history_status.pack(anchor="w")
 
 update_gui()
 root.mainloop()
