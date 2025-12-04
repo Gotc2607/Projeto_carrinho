@@ -1,105 +1,195 @@
-# 🤖 Robô Entregador Controlado via Interface Gráfica
+# 🤖 **Robô Entregador – Controle via Interface Gráfica (Python + Arduino)**
 
-Este projeto consiste em um sistema completo para controle de um carrinho robótico (4WD) através de uma interface gráfica (GUI) desenvolvida em Python. O sistema permite planejar rotas, visualizar o caminho estimado em tempo real (Dead Reckoning) e executar tarefas de entrega utilizando um braço robótico (Servo Motor).
+Este projeto implementa um sistema completo para controlar um robô 4WD com servo de entrega, capaz de executar rotas planejadas, simular o movimento na tela e registrar rotas na nuvem via **Supabase**.
 
-![Status do Projeto](https://img.shields.io/badge/Status-Funcional-brightgreen)
-![Python Version](https://img.shields.io/badge/Python-3.x-blue)
-![Arduino](https://img.shields.io/badge/Hardware-Arduino-00979D)
-
-## 📋 Funcionalidades
-
-* **Controle de Movimento:** Comandos precisos para Frente, Trás, Esquerda e Direita.
-* **Sistema de Entrega:** Comando específico para acionar o Servo Motor e realizar uma entrega.
-* **Simulação Visual:** A interface desenha o caminho que o robô está percorrendo na tela enquanto envia os comandos.
-* **Fila de Comandos:** Permite montar uma lista de ações complexas e enviá-las todas de uma vez.
-* **Suporte Híbrido:** Código preparado para comunicação via USB (Serial) e Bluetooth.
-
-## 🛠️ Hardware Necessário
-
-* 1x Placa Arduino (Uno, Nano ou Mega)
-* 1x Driver de Motor (Ponte H L298N ou similar)
-* 4x Motores DC com Rodas (Chassi 4WD)
-* 1x Servo Motor (ex: SG90) para o mecanismo de entrega
-* 1x Módulo Bluetooth HC-05/HC-06 (Opcional para uso sem fio)
-* Baterias para alimentação (Recomendado: Li-Ion 18650 ou LiPo)
-
-### 🔌 Pinagem (Conexões)
-
-Conecte os componentes no Arduino seguindo a configuração definida no firmware:
-
-| Componente | Pino Arduino | Função |
-| :--- | :---: | :--- |
-| **Motor Esq. Frente** | 5 | Controle Rodas Esquerdas (Frente) |
-| **Motor Esq. Trás** | 4 | Controle Rodas Esquerdas (Trás) |
-| **Motor Dir. Frente** | 3 | Controle Rodas Direitas (Frente) |
-| **Motor Dir. Trás** | 2 | Controle Rodas Direitas (Trás) |
-| **Servo Motor** | 6 | Braço de Entrega |
-| **Bluetooth RX** | 10 | Comunicação Wireless |
-| **Bluetooth TX** | 11 | Comunicação Wireless |
-
-> **Nota:** O GND do Arduino deve estar conectado ao GND da fonte externa das baterias (Terra Comum).
+Ele foi desenvolvido para testes reais com Arduino, para simulação via software e também para testes automatizados usando uma porta serial mock.
 
 ---
 
-## 💻 Instalação e Configuração
+# 🧩 **Visão Geral**
 
-### 1. Firmware (Arduino)
+O sistema oferece:
 
-1.  Baixe e instale o [Arduino IDE](https://www.arduino.cc/en/software).
-2.  Abra o arquivo `carrinho.ino`.
-3.  Conecte o Arduino ao PC via USB.
-4.  Selecione a placa e a porta correta em **Ferramentas**.
-5.  Faça o **Upload** do código.
+### ✅ **Interface gráfica em Python (Tkinter)**
+- Criação de rotas por comandos.
+- Execução da rota passo a passo.
+- Visualização gráfica do movimento (Dead Reckoning).
+- Marcação de pontos de entrega no mapa.
+- Conexão com Arduino real, Bluetooth ou modo simulado.
 
-### 2. Software de Controle (Python)
+### ✅ **Comunicação com Arduino**
+- Protocolo próprio baseado em comandos:
+  - `LIMPARFILA\`
+  - `ADD(X(valor))\`
+  - `EXECUTAR\`
+- Respostas aguardadas:
+  - `OK_CLR`
+  - `OK_ADD`
+  - `OK_RUN`
+  - `STEP_DONE`
+  - `FINISH`
 
-Certifique-se de ter o Python instalado. Em seguida, instale a biblioteca de comunicação serial:
+### ✅ **Modo Simulado / MockSerial**
+Permite testar toda a interface sem Arduino físico.
+
+### ✅ **Integração com Supabase**
+- Armazena rotas.
+- Salva comandos na ordem correta.
+- Carrega rotas do histórico.
+- Mantém cache local para navegação rápida.
+
+### ✅ **Testes automatizados**
+O arquivo `test_interface.py` usa `unittest` para validar a lógica interna dos movimentos.
+
+---
+
+# 🛠️ **Tecnologias Utilizadas**
+
+| Tecnologia | Uso |
+|-----------|-----|
+| **Python 3.x** | Interface gráfica e lógica principal |
+| **Tkinter** | GUI |
+| **PySerial** | Comunicação serial com Arduino |
+| **Supabase Python Client** | Banco de dados na nuvem |
+| **Arduino (C++)** | Firmware do robô |
+| **MockSerial** | Testes sem hardware |
+| **unittest** | Testes automatizados |
+
+---
+
+# 📡 **Arquitetura do Sistema**
+
+### 🖥️ **Python / Interface**
+A GUI controla:
+- Construção da fila de comandos
+- Conexão com portas reais ou mock
+- Sincronização com Supabase
+- Renderização gráfica do caminho
+- Execução simulada ou real
+
+### 🤖 **Arduino**
+Recebe e executa comandos:
+- Movimento para frente/trás
+- Giros
+- Comando `ENTREGAR` (servo)
+
+### ☁️ **Supabase**
+Tabelas:
+- `rotas` → nome e data
+- `comandos` → { rota_id, ordem, comando, valor }
+
+---
+
+# 📦 **Instalação**
+
+### 1) Como rodar a interface Python
+
+Instale dependências:
 
 ```bash
-pip install pyserial
+pip install pyserial supabase
 ```
-# 🚀 Como Usar
 
-## Passo 1: Conexão Física
+Depois execute:
 
-  - Ligue a alimentação do robô (baterias).
-  - Conecte o Arduino ao computador via cabo USB.
-
-## Passo 2: Executar a Interface
-
-Abra o terminal na pasta do projeto e execute:
-Bash
-
+```bash
 python interface.py
+```
 
-Passo 3: Operação
+### 2) Permissões (Linux)
 
-  - Na interface, localize a seção "Porta Serial".
-  - Selecione a porta correspondente ao Arduino (ex: COM3 no Windows ou /dev/ttyUSB0 no Linux) e clique em Conectar.
-  - Na área "Criar Rota", escolha o comando (FRENTE, ESQUERDA, etc.) e a distância/ângulo.
-  - Clique em Adicionar. Repita para quantos movimentos desejar.
-  - Clique em ENVIAR E RODAR.
+```bash
+sudo usermod -a -G dialout $USER
+sudo apt install libfuse2
+```
 
-# 🐧 Dicas para Usuários Linux
+---
 
-Se você tiver problemas para rodar ou conectar, verifique as permissões:
+# 🎮 **Como Usar**
 
-- 1. Permissão na Porta USB (Erro de Permissão/Acesso Negado): Adicione seu usuário ao grupo dialout para ter acesso à porta serial:
-Bash
+### 1) Conecte o robô
+- USB (Serial)
+- Bluetooth
+- ou selecione **TESTE** para usar MockSerial
 
-  ```sudo usermod -a -G dialout $USER```
+### 2) Monte a rota
+- Escolha um comando (FRENTE, ESQUERDA, DIREITA, ENTREGAR)
+- Defina o valor (se necessário)
+- Clique **Adicionar**
 
-  (Reinicie o computador após este comando)
+### 3) Execute
+- Clique em **EXECUTAR**
+- O mapa será atualizado conforme os passos são concluídos
 
-- 2. Arduino IDE (AppImage): Se estiver usando o Arduino IDE via AppImage e ele não abrir ou der erro de Sandbox:
-Bash
+### 4) Salve na nuvem
+- Digite o nome da rota
+- Clique **Salvar na Nuvem**
 
-# Instalar dependência antiga
-```sudo apt install libfuse2```
+### 5) Histórico
+- Aba **Histórico**
+- Clique em **Atualizar**
+- Clique em **Carregar** para simular imediatamente a rota do banco
 
-# Rodar sem sandbox (se der erro na inicialização)
-```./arduino-ide.AppImage --no-sandbox```
+---
 
-# 📝 Licença
+# 🔌 **Protocolo de Comunicação (Resumo)**
 
-Este projeto é de código aberto. Use livremente para estudos e projetos acadêmicos.
+### Comandos enviados:
+
+```
+LIMPARFILA\
+ADD(F(100))\
+ADD(E(90))\
+ADD(O(0))\
+EXECUTAR\
+```
+
+### Respostas esperadas:
+
+```
+OK_CLR
+OK_ADD
+OK_ADD
+OK_ADD
+OK_RUN
+STEP_DONE 0
+STEP_DONE 1
+STEP_DONE 2
+FINISH
+```
+
+---
+
+# 🧪 **Testes Automatizados**
+
+Exemplo de execução:
+
+```bash
+python -m unittest test_interface.py
+```
+
+---
+
+# ✨ **Modo Teste (MockSerial)**
+
+Ideal para quando você está sem Arduino.
+
+- Simula respostas `OK_ADD`, `STEP_DONE`, etc.
+- Permite testar toda a interface sem hardware.
+
+---
+
+# 🗺️ **Visualização Gráfica**
+
+A interface exibe:
+- Plano cartesiano
+- Caminho percorrido
+- Posição atual do robô
+- Ângulo
+- Marcadores de entregas (ovos) em dourado
+
+---
+
+# 📄 **Licença**
+
+Uso livre para projetos pessoais, acadêmicos e de pesquisa.
