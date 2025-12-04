@@ -5,7 +5,6 @@
 
 SoftwareSerial meuBT(10, 11);
 
-// --- HARDWARE ---
 #define MOTOR_ESQ_FRENTE 5
 #define MOTOR_ESQ_TRAS   4
 #define MOTOR_DIR_FRENTE 8
@@ -20,7 +19,6 @@ const float pi = 3.1415;
 float distanciaEsq = 0, distanciaDir = 0;
 volatile unsigned long pulsosEsq = 0, pulsosDir = 0;
 
-// --- FILA RAM ---
 #define MAX_FILA_RAM 30
 #define MAX_COMANDO_LEN 20
 char filaRAM[MAX_FILA_RAM][MAX_COMANDO_LEN];
@@ -29,10 +27,8 @@ byte totalFilaRAM = 0;
 Servo meuServo;
 byte posicaoServo = 0;
 
-// --- RESPOSTA ---
 void responder(String msg) { Serial.println(msg); meuBT.println(msg); }
 
-// --- ENCODERS ---
 void contarEsq() { pulsosEsq++; }
 void contarDir() { pulsosDir++; }
 void posicao() {
@@ -50,21 +46,17 @@ void parar() {
   digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, LOW);
 }
 
-// --- MOVIMENTOS LINEARES (FRENTE/TRAS) ---
 bool wait_movement(float distMetaEsq, float distMetaDir, unsigned long timeoutMs) {
     unsigned long inicio = millis();
     float acEsq = 0, acDir = 0;
     posicao(); 
     while(true) {
-        // TIMEOUT: Se estourar o tempo, para e avisa erro
         if (millis() - inicio > timeoutMs) { parar(); responder("ERR_TIMEOUT"); return false; }
         
-        // Verifica se chegou
         bool esqOk = (distMetaEsq <= 0) || (acEsq >= distMetaEsq);
         bool dirOk = (distMetaDir <= 0) || (acDir >= distMetaDir);
         if (esqOk && dirOk) break;
         
-        // Controle simples ON/OFF
         if (!esqOk) { digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW); }
         else { digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, LOW); }
         
@@ -80,8 +72,6 @@ bool wait_movement(float distMetaEsq, float distMetaDir, unsigned long timeoutMs
 void andarFrente(int dist) {
   if (dist <= 0) return;
   if (dist > 200) dist = 200;
-  // --- CORREÇÃO AQUI: AUMENTEI MUITO O TEMPO ---
-  // 10 segundos de base + 400ms por cada centimetro.
   unsigned long t = 10000 + (dist * 400); 
   wait_movement(dist, dist, t);
 }
@@ -91,17 +81,13 @@ void andarTras(int dist) {
   float da = 0; posicao();
   unsigned long ini = millis();
   while(da < dist){
-    // Timeout fixo de 15 segundos para ré
-    if (millis() - ini > 15000) break; 
+    if (millis() - ini > 15000) break;
     digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, HIGH);
     digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, HIGH);
     posicao(); da += distanciaEsq; delay(10);
   }
   parar();
 }
-
-// --- CURVAS (GIRO NO EIXO / SPIN TURN) ---
-// Uma roda vai pra frente, a outra pra trás. O raio é metade da largura (~10.25cm)
 
 void curvaEsquerda(int graus) {
   if (graus <= 0) return;
@@ -110,18 +96,11 @@ void curvaEsquerda(int graus) {
   unsigned long inicio = millis();
   float acDir = 0; 
   posicao();
-  
   while(acDir < distAlvo){
-    // AUMENTADO PARA 15 SEGUNDOS
     if (millis() - inicio > 15000) { parar(); responder("ERR_TIMEOUT_G"); return; }
-    
-    // ESQUERDA: TRAS | DIREITA: FRENTE
     digitalWrite(MOTOR_ESQ_FRENTE, LOW); digitalWrite(MOTOR_ESQ_TRAS, HIGH);
     digitalWrite(MOTOR_DIR_FRENTE, HIGH); digitalWrite(MOTOR_DIR_TRAS, LOW);
-    
-    posicao(); 
-    acDir += distanciaDir; 
-    delay(10);
+    posicao(); acDir += distanciaDir; delay(10);
   }
   parar();
 }
@@ -129,35 +108,25 @@ void curvaEsquerda(int graus) {
 void curvaDireita(int graus) {
   if (graus <= 0) return;
   float distAlvo = graus * (10.25 * 0.0174533); 
-  
   unsigned long inicio = millis();
   float acEsq = 0;
   posicao();
-  
   while(acEsq < distAlvo){
-    // AUMENTADO PARA 15 SEGUNDOS
     if (millis() - inicio > 15000) { parar(); responder("ERR_TIMEOUT_G"); return; }
-    
-    // ESQUERDA: FRENTE | DIREITA: TRAS
     digitalWrite(MOTOR_ESQ_FRENTE, HIGH); digitalWrite(MOTOR_ESQ_TRAS, LOW);
     digitalWrite(MOTOR_DIR_FRENTE, LOW); digitalWrite(MOTOR_DIR_TRAS, HIGH);
-    
-    posicao(); 
-    acEsq += distanciaEsq;
-    delay(10);
+    posicao(); acEsq += distanciaEsq; delay(10);
   }
   parar();
 }
 
-// --- FUNÇÃO DO OVO ---
 void depositarOvo() {
-  meuServo.write(90); // Abre
+  meuServo.write(90);
   delay(1000);        
-  meuServo.write(0);  // Fecha
+  meuServo.write(0);
   delay(500);
 }
 
-// --- GERENCIAMENTO FILA ---
 void limparFilaRAM() { totalFilaRAM = 0; responder("OK_CLR"); }
 
 void adicionarNaFilaRAM(char* cmd) {
@@ -169,17 +138,17 @@ void adicionarNaFilaRAM(char* cmd) {
 }
 
 void processarComando(const char* cmd, bool fromRAM);
-
 void executarFilaRAM() {
   if (totalFilaRAM == 0) { responder("ERR_EMPTY"); return; }
-  responder("OK_RUN"); 
+  responder("OK_RUN");
   for (byte i = 0; i < totalFilaRAM; i++) {
     char temp[MAX_COMANDO_LEN]; strcpy(temp, filaRAM[i]);
-    processarComando(temp, true); 
+    processarComando(temp, true);
     String msg = "STEP_DONE "; msg += i; responder(msg);
-    delay(300); // Pausa para estabilizar entre movimentos
+    delay(300);
   }
-  responder("FINISH"); totalFilaRAM = 0; 
+  responder("FINISH");
+  totalFilaRAM = 0; 
 }
 
 void filtrar(char* str) {
@@ -188,7 +157,8 @@ void filtrar(char* str) {
     char c = str[i];
     if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || 
         (c >= '0' && c <= '9') || c == '(' || c == ')' || c == '-') {
-      if (c >= 'a' && c <= 'z') str[j++] = c - 32; else str[j++] = c;
+      if (c >= 'a' && c <= 'z') str[j++] = c - 32;
+      else str[j++] = c;
     } else if (c == '@' || c == '\\') break;
     i++;
   }
@@ -197,7 +167,8 @@ void filtrar(char* str) {
 
 void processarComando(const char* comando, bool fromRAM) {
   char cmdLimpo[MAX_COMANDO_LEN];
-  strncpy(cmdLimpo, comando, MAX_COMANDO_LEN - 1); cmdLimpo[MAX_COMANDO_LEN - 1] = '\0';
+  strncpy(cmdLimpo, comando, MAX_COMANDO_LEN - 1);
+  cmdLimpo[MAX_COMANDO_LEN - 1] = '\0';
   filtrar(cmdLimpo); if (strlen(cmdLimpo) == 0) return;
 
   if (strcmp(cmdLimpo, "LIMPARFILA") == 0) { limparFilaRAM(); return; }
@@ -233,17 +204,20 @@ void setup() {
 
 void loop() {
   if (meuBT.available()) {
-    char buf[MAX_COMANDO_LEN]; byte idx = 0; unsigned long ini = millis();
+    char buf[MAX_COMANDO_LEN]; byte idx = 0;
+    unsigned long ini = millis();
     while (meuBT.available() && idx < MAX_COMANDO_LEN - 1) {
-      char c = meuBT.read(); if (c == '\\') break; buf[idx++] = c;
-      if (millis() - ini > 100) break; 
+      char c = meuBT.read();
+      if (c == '\\') break; buf[idx++] = c;
+      if (millis() - ini > 100) break;
     }
     buf[idx] = '\0'; if (idx > 0) processarComando(buf, false);
   }
   if (Serial.available()) {
      char buf[MAX_COMANDO_LEN]; byte idx = 0;
      while (Serial.available() && idx < MAX_COMANDO_LEN - 1) {
-       char c = Serial.read(); if (c == '\n' || c == '\\') break; buf[idx++] = c; delay(2);
+       char c = Serial.read();
+       if (c == '\n' || c == '\\') break; buf[idx++] = c; delay(2);
      }
      buf[idx] = '\0'; if (idx > 0) processarComando(buf, false);
   }

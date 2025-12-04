@@ -1,6 +1,3 @@
-# =================================================================
-# == EGG0-1 - INTERFACE ESTÁVEL (TIMEOUT AUMENTADO)             ==
-# =================================================================
 import tkinter as tk
 from tkinter import ttk, messagebox
 import math
@@ -11,28 +8,22 @@ import time
 from datetime import datetime
 from supabase import create_client, Client
 
-# --- CONFIGURAÇÃO DO SUPABASE ---
 SUPABASE_URL = "https://xdigdkwgnqxsnarvpqxu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhkaWdka3dnbnF4c25hcnZwcXh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ1NzAzMTQsImV4cCI6MjA4MDE0NjMxNH0.DdLkpy5oQaWEPGQJeu4Dxg6Hzd3oHlv9hXhIBqureo8"
 
 supabase: Client = None
 
-# --- Constantes da GUI ---
 CANVAS_WIDTH = 600 
 CANVAS_HEIGHT = 600
 SCALE = 0.7
 ROBOT_RADIUS = 10 * SCALE 
 
-# --- Variáveis Globais ---
 ser = None
 robot_x, robot_y, robot_theta = 0, 0, 0 
 path_points = []
 ovos_entregues = [] 
 cache_rotas_historico = []
 
-# =================================================================
-# SUPABASE
-# =================================================================
 def init_db():
     global supabase
     try:
@@ -94,9 +85,6 @@ def carregar_rota_selecionada():
         except: pass
     threading.Thread(target=_thread_load, daemon=True).start()
 
-# =================================================================
-# LÓGICA VISUAL E ANIMAÇÃO
-# =================================================================
 def simular_movimento(cmd_str, animate=True):
     global robot_x, robot_y, robot_theta, ovos_entregues
     parts = cmd_str.split()
@@ -143,33 +131,34 @@ def update_gui():
     ey = cy - ROBOT_RADIUS*1.5 * math.sin(math.radians(robot_theta))
     canvas.create_line(cx, cy, ex, ey, fill="black", width=2)
 
-# =================================================================
-# COMUNICAÇÃO SERIAL
-# =================================================================
 def connect_serial():
     global ser
+    if port_combobox.get() == "TESTE":
+        try:
+            from tests.mock_serial import MockSerial
+            ser = MockSerial("TESTE", 9600)
+            status_label.config(text="Modo Teste Virtual", foreground="blue")
+            return
+        except ImportError:
+            messagebox.showerror("Erro", "Arquivo mock_serial.py não encontrado")
+            return
+
     if ghost_mode_var.get():
         status_label.config(text="Simulação Ativa", foreground="orange")
         messagebox.showinfo("Modo Fantasma", "Conexão Simulada Ativa!")
         return
     
-    # Tenta conectar
     try:
         port = port_combobox.get()
         if not port:
             messagebox.showwarning("Aviso", "Selecione uma porta COM!")
             return
-
-        # --- AUMENTAMOS O TIMEOUT PARA 2 SEGUNDOS ---
         ser = serial.Serial(port, 9600, timeout=2) 
-        
-        # Espera um pouco para o DTR resetar o Arduino (comportamento padrão)
         time.sleep(2) 
-        
         status_label.config(text="Conectado!", foreground="green")
     except Exception as e: 
         status_label.config(text="Erro de Conexão", foreground="red")
-        messagebox.showerror("Erro de Conexão", f"Não foi possível conectar na porta {port}.\n\nDetalhes: {e}\n\nDica: Tente outra porta COM ou verifique se o Bluetooth está pareado.")
+        messagebox.showerror("Erro de Conexão", f"Falha na porta {port}.\n{e}")
 
 def send_commands():
     cmds = command_listbox.get(0, tk.END)
@@ -180,7 +169,6 @@ def send_commands():
     def _wait_ack(ack):
         if ghost_mode_var.get(): time.sleep(0.05); return True
         st = time.time()
-        # Timeout de espera pelo ACK também um pouco maior
         while time.time() - st < 4: 
             if ser.in_waiting:
                 try:
@@ -203,7 +191,7 @@ def send_commands():
             for c in cmds:
                 p = c.split()
                 if p[0] == "ENTREGAR":
-                    payload = "ADD(O(0))\\" # O de Ovo
+                    payload = "ADD(O(0))\\"
                 else:
                     l = p[0][0]; v = p[1] if len(p)>1 else "0"
                     payload = f"ADD({l}({v}))\\"
@@ -238,7 +226,7 @@ def send_commands():
                         idx += 1
                     elif "FINISH" in l: break
                     elif "ERR" in l: 
-                        messagebox.showerror("Erro", "Falha no Robô (Colisão/Timeout)!"); return
+                        messagebox.showerror("Erro", "Falha no Robô!"); return
                 time.sleep(0.01)
             
             status_label.config(text="Concluído!")
@@ -246,9 +234,6 @@ def send_commands():
 
     threading.Thread(target=_run, daemon=True).start()
 
-# =================================================================
-# GUI SETUP
-# =================================================================
 def add_cmd():
     t = cmd_type.get()
     if t == "ENTREGAR": command_listbox.insert(tk.END, t)
@@ -266,60 +251,58 @@ def toggle_ui(*a):
     if cmd_type.get() in ["DIREITA", "ESQUERDA", "ENTREGAR"]: cmd_val.pack_forget()
     else: cmd_val.pack(fill="x", padx=5)
 
-init_db()
-root = tk.Tk(); root.title("EGG0-1 Final (Stable Connection)")
-main_frame = ttk.Frame(root, padding=5); main_frame.grid(row=0, column=0, sticky="nsew")
+if __name__ == "__main__":
+    init_db()
+    root = tk.Tk(); root.title("EGG0-1 Final")
+    main_frame = ttk.Frame(root, padding=5); main_frame.grid(row=0, column=0, sticky="nsew")
 
-canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken")
-canvas.grid(row=0, column=0, rowspan=2, padx=5, pady=5)
+    canvas = tk.Canvas(main_frame, width=CANVAS_WIDTH, height=CANVAS_HEIGHT, bg="white", relief="sunken")
+    canvas.grid(row=0, column=0, rowspan=2, padx=5, pady=5)
 
-panel = ttk.Frame(main_frame); panel.grid(row=0, column=1, sticky="ns")
-tabs = ttk.Notebook(panel); tabs.grid(row=0, column=0, sticky="nsew")
+    panel = ttk.Frame(main_frame); panel.grid(row=0, column=1, sticky="ns")
+    tabs = ttk.Notebook(panel); tabs.grid(row=0, column=0, sticky="nsew")
 
-# === ABA CONTROLE ===
-tab_controle = ttk.Frame(tabs, padding=10); tabs.add(tab_controle, text="Controle")
+    tab_controle = ttk.Frame(tabs, padding=10); tabs.add(tab_controle, text="Controle")
 
-lf_conn = ttk.LabelFrame(tab_controle, text="Conexão"); lf_conn.pack(fill="x", pady=5)
-ghost_mode_var = tk.BooleanVar(value=False)
-ttk.Checkbutton(lf_conn, text="Modo Simulação", variable=ghost_mode_var).pack(anchor="w", padx=5)
-try: pts = [p.device for p in serial.tools.list_ports.comports()]
-except: pts = []
-port_combobox = ttk.Combobox(lf_conn, values=pts); 
-if pts: port_combobox.current(0)
-port_combobox.pack(fill="x", padx=5)
-ttk.Button(lf_conn, text="Conectar", command=connect_serial).pack(fill="x", padx=5)
-status_label = ttk.Label(lf_conn, text="Offline", foreground="blue"); status_label.pack(anchor="w", padx=5)
+    lf_conn = ttk.LabelFrame(tab_controle, text="Conexão"); lf_conn.pack(fill="x", pady=5)
+    ghost_mode_var = tk.BooleanVar(value=False)
+    ttk.Checkbutton(lf_conn, text="Modo Simulação", variable=ghost_mode_var).pack(anchor="w", padx=5)
+    
+    try: pts = [p.device for p in serial.tools.list_ports.comports()]
+    except: pts = []
+    pts.append("TESTE") 
+    port_combobox = ttk.Combobox(lf_conn, values=pts); 
+    if pts: port_combobox.current(0)
+    port_combobox.pack(fill="x", padx=5)
+    ttk.Button(lf_conn, text="Conectar", command=connect_serial).pack(fill="x", padx=5)
+    status_label = ttk.Label(lf_conn, text="Offline", foreground="blue"); status_label.pack(anchor="w", padx=5)
 
-# --- CORREÇÃO DA ORDEM DE CRIAÇÃO (UI) ---
-lf_cmds = ttk.LabelFrame(tab_controle, text="Comandos"); lf_cmds.pack(fill="x", pady=5)
-cmd_val = ttk.Entry(lf_cmds); cmd_val.insert(0, "10"); 
-# NÃO FAZEMOS PACK AQUI. O toggle_ui vai fazer.
+    lf_cmds = ttk.LabelFrame(tab_controle, text="Comandos"); lf_cmds.pack(fill="x", pady=5)
+    cmd_val = ttk.Entry(lf_cmds); cmd_val.insert(0, "10"); 
+    
+    cmd_type = tk.StringVar(value="FRENTE"); 
+    ttk.OptionMenu(lf_cmds, cmd_type, "FRENTE", "FRENTE", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x", padx=5)
+    ttk.Button(lf_cmds, text="Adicionar", command=add_cmd).pack(fill="x", padx=5)
 
-cmd_type = tk.StringVar(value="FRENTE"); 
-ttk.OptionMenu(lf_cmds, cmd_type, "FRENTE", "FRENTE", "DIREITA", "ESQUERDA", "ENTREGAR").pack(fill="x", padx=5)
-ttk.Button(lf_cmds, text="Adicionar", command=add_cmd).pack(fill="x", padx=5)
+    cmd_type.trace_add("write", toggle_ui)
+    toggle_ui()
 
-cmd_type.trace_add("write", toggle_ui)
-toggle_ui() # Configura o estado inicial correto
-# ------------------------------------
+    lf_queue = ttk.LabelFrame(tab_controle, text="Fila"); lf_queue.pack(fill="both", expand=True, pady=5)
+    command_listbox = tk.Listbox(lf_queue, height=8); command_listbox.pack(fill="both", expand=True, padx=5)
+    ttk.Button(lf_queue, text="Limpar", command=clear_commands).pack(side="left")
+    ttk.Button(lf_queue, text="EXECUTAR", command=send_commands).pack(side="right")
 
-lf_queue = ttk.LabelFrame(tab_controle, text="Fila"); lf_queue.pack(fill="both", expand=True, pady=5)
-command_listbox = tk.Listbox(lf_queue, height=8); command_listbox.pack(fill="both", expand=True, padx=5)
-ttk.Button(lf_queue, text="Limpar", command=clear_commands).pack(side="left")
-ttk.Button(lf_queue, text="EXECUTAR", command=send_commands).pack(side="right")
+    lf_save = ttk.LabelFrame(tab_controle, text="Salvar"); lf_save.pack(fill="x", pady=5)
+    ttk.Label(lf_save, text="Nome:").pack(anchor="w")
+    nome_rota_entry = ttk.Entry(lf_save); nome_rota_entry.pack(fill="x")
+    ttk.Button(lf_save, text="Salvar na Nuvem", command=salvar_rota_db).pack(fill="x")
+    ttk.Button(lf_save, text="Resetar Mapa", command=reset_path).pack(fill="x")
 
-lf_save = ttk.LabelFrame(tab_controle, text="Salvar"); lf_save.pack(fill="x", pady=5)
-ttk.Label(lf_save, text="Nome:").pack(anchor="w")
-nome_rota_entry = ttk.Entry(lf_save); nome_rota_entry.pack(fill="x")
-ttk.Button(lf_save, text="Salvar na Nuvem", command=salvar_rota_db).pack(fill="x")
-ttk.Button(lf_save, text="Resetar Mapa", command=reset_path).pack(fill="x")
+    tab_historico = ttk.Frame(tabs, padding=10); tabs.add(tab_historico, text="Histórico")
+    history_listbox = tk.Listbox(tab_historico, height=20); history_listbox.pack(fill="both", expand=True)
+    ttk.Button(tab_historico, text="Atualizar", command=atualizar_historico).pack(fill="x")
+    ttk.Button(tab_historico, text="Carregar", command=carregar_rota_selecionada).pack(fill="x")
+    history_status = ttk.Label(tab_historico, text="..."); history_status.pack(anchor="w")
 
-# === ABA HISTÓRICO ===
-tab_historico = ttk.Frame(tabs, padding=10); tabs.add(tab_historico, text="Histórico")
-history_listbox = tk.Listbox(tab_historico, height=20); history_listbox.pack(fill="both", expand=True)
-ttk.Button(tab_historico, text="Atualizar", command=atualizar_historico).pack(fill="x")
-ttk.Button(tab_historico, text="Carregar", command=carregar_rota_selecionada).pack(fill="x")
-history_status = ttk.Label(tab_historico, text="..."); history_status.pack(anchor="w")
-
-update_gui()
-root.mainloop()
+    update_gui()
+    root.mainloop()
